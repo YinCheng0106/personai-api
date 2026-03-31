@@ -38,25 +38,25 @@ Issues = "https://github.com/YinCheng0106/personai-api/issues"
 Source = "https://github.com/YinCheng0106/personai-api"
 
 [tool.hatch.version]
-path = "src/personai_api/__about__.py"
+path = "src/personai-api/__about__.py"
 
 [tool.hatch.envs.types]
 extra-dependencies = [
   "mypy>=1.0.0",
 ]
 [tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/personai_api tests}"
+check = "mypy --install-types --non-interactive {args:src/personai-api tests}"
 
 [tool.coverage.run]
-source_pkgs = ["personai_api", "tests"]
+source_pkgs = ["personai-api", "tests"]
 branch = true
 parallel = true
 omit = [
-  "src/personai_api/__about__.py",
+  "src/personai-api/__about__.py",
 ]
 
 [tool.coverage.paths]
-personai_api = ["src/personai_api", "*/personai-api/src/personai_api"]
+personai-api = ["src/personai-api", "*/personai-api/src/personai-api"]
 tests = ["tests", "*/personai-api/tests"]
 
 [tool.coverage.report]
@@ -67,4 +67,4 @@ exclude_lines = [
 ]
 
 [tool.fastapi]
-entrypoint = "personai_api.main:app"
+entrypoint = "personai-api.main:app"
