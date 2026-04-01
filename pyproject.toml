@@ -8,9 +8,9 @@ dynamic = ["version"]
 description = "AI Smart Fitness Coach Backend API"
 readme = "README.md"
 
-requires-python = ">=3.11"
-license = "MIT"
-keywords = ["fastapi", "ai", "fitness", "mediapipe"]
+requires-python = ">=3.11" # 支援的 Python 版本
+license = "MIT" 
+keywords = ["fastapi", "ai", "fitness", "biomechanics"]
 authors = [
   { name = "YinCheng0106", email = "eason010630@gmail.com" },
 ]
@@ -24,12 +24,9 @@ classifiers = [
 
 dependencies = [
   "fastapi[standard]>=0.110.0",          # 後端 API 框架
-  "websockets>=12.0",          # 處理前端即時影像串流與數據的通訊協定
-  "mediapipe>=0.10.11",        # Google 視覺辨識核心 (姿態捕捉)
-  "opencv-python>=4.9.0",      # 影像處理套件
+  "websockets>=12.0",          # 處理前端即時 keypoints 串流通訊
   "numpy>=1.26.4",             # 幾何角度與矩陣運算
   "pandas>=2.2.1",             # InBody 數據與運動紀錄處理
-  "pyttsx3>=2.90",             # 文字轉語音模組
 ]
 
 [project.urls]
@@ -38,25 +35,25 @@ Issues = "https://github.com/YinCheng0106/personai-api/issues"
 Source = "https://github.com/YinCheng0106/personai-api"
 
 [tool.hatch.version]
-path = "src/personai-api/__about__.py"
+path = "src/personai_api/__about__.py"
 
 [tool.hatch.envs.types]
 extra-dependencies = [
   "mypy>=1.0.0",
 ]
 [tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/personai-api tests}"
+check = "mypy --install-types --non-interactive {args:src/personai_api tests}"
 
 [tool.coverage.run]
 source_pkgs = ["personai-api", "tests"]
 branch = true
 parallel = true
 omit = [
-  "src/personai-api/__about__.py",
+  "src/personai_api/__about__.py",
 ]
 
 [tool.coverage.paths]
-personai-api = ["src/personai-api", "*/personai-api/src/personai-api"]
+personai-api = ["src/personai_api", "*/personai-api/src/personai_api"]
 tests = ["tests", "*/personai-api/tests"]
 
 [tool.coverage.report]
@@ -67,4 +64,4 @@ exclude_lines = [
 ]
 
 [tool.fastapi]
-entrypoint = "personai-api.main:app"
+entrypoint = "personai_api.main:app"
