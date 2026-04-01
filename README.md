@@ -1,10 +1,12 @@
 # PersonAI API
 
-AI 智慧健身教練後端服務 — 即時生物力學分析、動作計數與姿勢錯誤偵測。
+AI-powered fitness coach backend — real-time biomechanical analysis, rep counting, and form error detection.
 
-前端（Next.js）透過 MediaPipe 進行姿態偵測，將 33 個人體關鍵點座標經 WebSocket 傳送至後端；後端專注於 **角度計算**、**FSM 狀態機判定**、**姿勢錯誤偵測** 與 **即時卡路里精算**，實現前後端職責分離的輕量化架構。
+The frontend (Next.js) performs pose detection via MediaPipe and streams 33 body keypoints over WebSocket to the backend. The backend focuses exclusively on **angle computation**, **FSM-based state tracking**, **form error detection**, and **real-time calorie estimation** — a lightweight, separation-of-concerns architecture with zero computer vision dependencies on the server.
 
-## 系統架構
+**English** | [繁體中文](./README_zh_tw.md)
+
+## Architecture
 
 ```
 ┌─────────────────────────┐         WebSocket (JSON)         ┌──────────────────────────┐
@@ -12,39 +14,40 @@ AI 智慧健身教練後端服務 — 即時生物力學分析、動作計數與
 │       (Next.js)         │                                  │     (FastAPI)            │
 │                         │  33 keypoints / frame            │                          │
 │  Webcam                 │ ◀──────────────────────────────  │  One-Euro Filter         │
-│    ↓                    │     分析結果 JSON                 │    ↓                     │
-│  MediaPipe Pose         │                                  │  角度計算 (NumPy)         │
+│    ↓                    │      Analysis result JSON        │    ↓                     │
+│  MediaPipe Pose         │                                  │  Angle calculation       │
 │    ↓                    │                                  │    ↓                     │
-│  Keypoints 擷取         │                                  │  FSM 狀態機              │
+│  Keypoint extraction    │                                  │  FSM state machine       │
 │    ↓                    │                                  │    ↓                     │
-│  JSON 送出              │                                  │  錯誤偵測 + 卡路里        │
+│  JSON dispatch          │                                  │  Error detection +       │
+│                         │                                  │  calorie tracking        │
 └─────────────────────────┘                                  └──────────────────────────┘
 ```
 
-## 功能特色
+## Features
 
-- **即時動作分析** — WebSocket 逐幀接收 keypoints，回傳角度、計數、錯誤提示
-- **FSM 狀態機** — 精準追蹤動作階段（IDLE → DESCENDING → BOTTOM → ASCENDING），避免誤計
-- **姿勢錯誤偵測** — 深蹲膝蓋內扣、軀幹前傾；伏地挺身身體下沉、臀部過高
-- **One-Euro Filter** — 自適應平滑濾波，減少關鍵點抖動同時保持低延遲
-- **METs 卡路里精算** — 基於代謝當量，依運動類型與體重即時累計消耗卡路里
-- **InBody 生理數據** — BMI / BMR / 淨體重計算，支援 Katch-McArdle 公式
-- **運動紀錄統計** — Pandas 分組統計報表與每日摘要
+- **Real-time motion analysis** — frame-by-frame keypoint processing via WebSocket, returning angles, rep counts, and error alerts
+- **Finite State Machine (FSM)** — precise phase tracking (IDLE → DESCENDING → BOTTOM → ASCENDING) with hysteresis to prevent miscounts
+- **Form error detection** — squat: knee valgus, excessive forward lean; push-up: hip sagging, hip piking
+- **One-Euro Filter** — adaptive low-pass smoothing that reduces landmark jitter while maintaining low latency
+- **METs calorie estimation** — metabolic equivalent-based real-time calorie accumulation by exercise type and body weight
+- **InBody body composition** — BMI / BMR / lean body mass calculations with Katch-McArdle formula
+- **Workout statistics** — Pandas-powered grouped reports and daily summaries
 
-## 支援的運動類型
+## Supported Exercises
 
-| 運動 | WebSocket 路徑 | FSM 狀態 | 偵測的錯誤 |
-|------|---------------|----------|-----------|
-| 深蹲 (Squat) | `/ws/analyze/squat` | IDLE → DESCENDING → BOTTOM → ASCENDING | 膝蓋內扣、深度不足、軀幹過度前傾 |
-| 伏地挺身 (Push-up) | `/ws/analyze/pushup` | UP → DESCENDING → BOTTOM → ASCENDING | 身體下沉、臀部過高、深度不足 |
+| Exercise | WebSocket Path | FSM States | Detected Errors |
+|----------|---------------|------------|-----------------|
+| Squat | `/ws/analyze/squat` | IDLE → DESCENDING → BOTTOM → ASCENDING | Knee valgus, insufficient depth, excessive forward lean |
+| Push-up | `/ws/analyze/pushup` | UP → DESCENDING → BOTTOM → ASCENDING | Hip sagging, hip piking, insufficient depth |
 
-## 快速開始
+## Getting Started
 
-### 環境需求
+### Prerequisites
 
 - Python >= 3.11
 
-### 安裝
+### Installation
 
 ```bash
 git clone https://github.com/YinCheng0106/personai-api.git
@@ -52,46 +55,46 @@ cd personai-api
 pip install -e .
 ```
 
-### 啟動開發伺服器
+### Start Development Server
 
 ```bash
 fastapi dev src/personai_api/main.py
 ```
 
-伺服器預設於 `http://localhost:8000` 啟動，互動式 API 文件位於 `/docs`。
+The server starts at `http://localhost:8000` by default. Interactive API docs are available at `/docs`.
 
-## API 端點
+## API Endpoints
 
 ### REST API
 
-| 方法 | 路徑 | 說明 |
-|------|------|------|
-| `GET` | `/server` | 伺服器健康檢查 |
-| `GET` | `/user/{user_id}` | 取得使用者資料與 BMI |
-| `POST` | `/inbody/{user_id}` | 儲存 / 更新 InBody 身體組成數據 |
-| `GET` | `/inbody/{user_id}` | 取得生理數據摘要 (BMI, BMR, LBM) |
-| `POST` | `/inbody/{user_id}/calories` | 計算特定運動消耗卡路里 |
-| `GET` | `/wk/{user_id}` | 取得運動紀錄列表 |
-| `POST` | `/wk/{user_id}/record` | 儲存單次運動紀錄 |
-| `GET` | `/wk/{user_id}/summary` | 運動統計報表（依類型分組） |
-| `GET` | `/wk/{user_id}/daily` | 每日統計摘要（供熱力圖使用） |
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/server` | Server health check |
+| `GET` | `/user/{user_id}` | Get user profile with BMI |
+| `POST` | `/inbody/{user_id}` | Save / update InBody body composition data |
+| `GET` | `/inbody/{user_id}` | Get physiological summary (BMI, BMR, LBM) |
+| `POST` | `/inbody/{user_id}/calories` | Calculate exercise calorie expenditure |
+| `GET` | `/wk/{user_id}` | Get workout record list |
+| `POST` | `/wk/{user_id}/record` | Save a workout record |
+| `GET` | `/wk/{user_id}/summary` | Workout statistics (grouped by exercise type) |
+| `GET` | `/wk/{user_id}/daily` | Daily summary (for heatmaps and charts) |
 
-> User ID 格式：小寫 `u` + 3 位數字，例如 `u001`
+> User ID format: lowercase `u` + 3 digits, e.g. `u001`
 
 ### WebSocket API
 
 #### `WS /ws/analyze/{exercise_type}?weight_kg=70`
 
-即時生物力學分析。每個連線維持獨立的 FSM 狀態與計數器。
+Real-time biomechanical analysis. Each connection maintains its own independent FSM state and rep counter.
 
 **Query Parameters:**
 
-| 參數 | 型別 | 預設值 | 說明 |
-|------|------|--------|------|
-| `exercise_type` | `string` | — | 運動類型：`squat` 或 `pushup` |
-| `weight_kg` | `float` | `70.0` | 使用者體重（公斤），用於卡路里計算 |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `exercise_type` | `string` | — | Exercise type: `squat` or `pushup` |
+| `weight_kg` | `float` | `70.0` | User body weight (kg) for calorie calculation |
 
-**送出格式 — Keypoints Frame:**
+**Request — Keypoints Frame:**
 
 ```json
 {
@@ -103,9 +106,9 @@ fastapi dev src/personai_api/main.py
 }
 ```
 
-> `keypoints` 陣列需包含完整的 33 個 MediaPipe Pose landmarks，`timestamp` 為選填。
+> The `keypoints` array must contain all 33 MediaPipe Pose landmarks. `timestamp` is optional.
 
-**回傳格式 — 分析結果:**
+**Response — Analysis Result:**
 
 ```json
 {
@@ -124,88 +127,88 @@ fastapi dev src/personai_api/main.py
 }
 ```
 
-**控制指令 — 重置計數器:**
+**Control Command — Reset Counter:**
 
 ```json
 { "action": "reset" }
 ```
 
-回傳：`{ "action": "reset", "status": "ok" }`
+Response: `{ "action": "reset", "status": "ok" }`
 
-## 專案結構
+## Project Structure
 
 ```
 src/personai_api/
-├── main.py                             # FastAPI app 入口
-├── __about__.py                        # 版本號
+├── main.py                             # FastAPI app entrypoint
+├── __about__.py                        # Version number
 ├── models/
 │   ├── biomechanics_schema.py          # WebSocket I/O schemas
-│   ├── inbody_schema.py                # InBody 生理數據 schemas
-│   ├── server_schema.py                # 伺服器狀態 schema
-│   ├── user_schema.py                  # 使用者 schema
-│   └── workout_schema.py              # 運動紀錄 schemas
+│   ├── inbody_schema.py                # InBody physiological data schemas
+│   ├── server_schema.py                # Server status schema
+│   ├── user_schema.py                  # User schema
+│   └── workout_schema.py              # Workout record schemas
 ├── routers/
-│   ├── analyze.py                      # WebSocket 即時分析端點
-│   ├── inbody.py                       # InBody 生理數據 API
-│   ├── server.py                       # 伺服器健康檢查
-│   ├── user.py                         # 使用者資料 API
-│   └── workout.py                      # 運動紀錄 API
+│   ├── analyze.py                      # WebSocket real-time analysis endpoint
+│   ├── inbody.py                       # InBody physiological data API
+│   ├── server.py                       # Server health check
+│   ├── user.py                         # User profile API
+│   └── workout.py                      # Workout record API
 └── services/
-    ├── biomechanics.py                 # 角度計算、濾波器、FSM 狀態機
-    └── inbody.py                       # BMR/BMI 計算、METs 卡路里、Pandas 報表
+    ├── biomechanics.py                 # Angle calculation, filters, FSM
+    └── inbody.py                       # BMR/BMI calculation, METs calories, Pandas reports
 ```
 
-## 核心演算法
+## Core Algorithms
 
 ### One-Euro Filter
 
-基於 [Casiez et al. (CHI 2012)](https://dl.acm.org/doi/10.1145/2207676.2208639) 的自適應低通濾波器。訊號緩慢變化時強力平滑以減少抖動，快速變化時降低平滑以減少延遲。每個關鍵點的 x、y 座標各配置一個濾波器（33 點 x 2 = 66 個濾波器）。
+An adaptive low-pass filter based on [Casiez et al. (CHI 2012)](https://dl.acm.org/doi/10.1145/2207676.2208639). It applies strong smoothing when signals change slowly (reducing jitter) and reduces smoothing when signals change rapidly (reducing latency). Each landmark's x and y coordinates have their own filter instance (33 landmarks x 2 = 66 filters).
 
-### FSM (有限狀態機)
+### FSM (Finite State Machine)
 
-以遲滯區間（hysteresis）防止狀態抖動，確保計數精準：
-
-```
-深蹲：   IDLE ──膝角<155°──▶ DESCENDING ──膝角≤100°──▶ BOTTOM ──膝角>105°──▶ ASCENDING ──膝角≥160°──▶ IDLE (+1 rep)
-伏地挺身：UP ──肘角<155°──▶ DESCENDING ──肘角≤90°───▶ BOTTOM ──肘角>95°───▶ ASCENDING ──肘角≥160°──▶ UP (+1 rep)
-```
-
-### METs 卡路里計算
+Hysteresis thresholds prevent state oscillation, ensuring accurate rep counting:
 
 ```
-卡路里 (kcal) = METs × 體重 (kg) × 時間 (hr)
+Squat:   IDLE ──knee<155°──▶ DESCENDING ──knee≤100°──▶ BOTTOM ──knee>105°──▶ ASCENDING ──knee≥160°──▶ IDLE (+1 rep)
+Push-up: UP ──elbow<155°──▶ DESCENDING ──elbow≤90°──▶ BOTTOM ──elbow>95°──▶ ASCENDING ──elbow≥160°──▶ UP (+1 rep)
 ```
 
-| 運動 | 輕度 | 中度 | 高強度 |
-|------|------|------|--------|
-| 深蹲 | 3.5 | 5.0 | 8.0 |
-| 伏地挺身 | 3.8 | 5.5 | 8.0 |
+### METs Calorie Calculation
 
-> 資料來源：Ainsworth BE, et al. "Compendium of Physical Activities" (2011)
+```
+Calories (kcal) = METs × Weight (kg) × Duration (hr)
+```
 
-## 開發指令
+| Exercise | Light | Moderate | Vigorous |
+|----------|-------|----------|----------|
+| Squat | 3.5 | 5.0 | 8.0 |
+| Push-up | 3.8 | 5.5 | 8.0 |
+
+> Source: Ainsworth BE, et al. "Compendium of Physical Activities" (2011)
+
+## Development
 
 ```bash
-# 型別檢查
+# Type checking
 hatch run types:check
 
-# 執行測試
+# Run tests
 hatch run pytest
 
-# 執行單一測試
+# Run a specific test
 hatch run pytest tests/test_specific.py::test_name
 ```
 
-## 技術棧
+## Tech Stack
 
-| 技術 | 用途 |
-|------|------|
-| [FastAPI](https://fastapi.tiangolo.com/) | 非同步 Web 框架 + WebSocket |
-| [Pydantic](https://docs.pydantic.dev/) | 資料驗證與序列化 |
-| [NumPy](https://numpy.org/) | 向量角度計算與矩陣運算 |
-| [Pandas](https://pandas.pydata.org/) | 運動數據統計報表 |
-| [Hatch](https://hatch.pypa.io/) | 建置系統與環境管理 |
+| Technology | Purpose |
+|------------|---------|
+| [FastAPI](https://fastapi.tiangolo.com/) | Async web framework + WebSocket |
+| [Pydantic](https://docs.pydantic.dev/) | Data validation and serialization |
+| [NumPy](https://numpy.org/) | Vector angle calculation and matrix operations |
+| [Pandas](https://pandas.pydata.org/) | Workout data statistical reports |
+| [Hatch](https://hatch.pypa.io/) | Build system and environment management |
 
-## 授權條款
+## License
 
 MIT License
