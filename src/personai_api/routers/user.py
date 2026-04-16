@@ -7,6 +7,7 @@ router = APIRouter(prefix="/user", tags=["使用者"])
 user_db = {
     "u001": {"id": "u001", "name": "Alex", "height": 175.0, "weight": 70.0},
     "u002": {"id": "u002", "name": "Eason", "height": 187.0, "weight": 75.0},
+    "u003": {"id": "u003", "name": "Ryan", "height": 170.0, "weight": 165.0},
 }
 
 
@@ -24,6 +25,12 @@ async def get_user(user_id: str = Path(...)):
         bmi_msg = "正常"
     elif bmi < 27:
         bmi_msg = "過重"
+    elif bmi < 30:
+        bmi_msg = "輕度肥胖"
+    elif bmi < 35:
+        bmi_msg = "中度肥胖"
+    elif bmi >= 35:
+        bmi_msg = "重度肥胖"
     else:
-        bmi_msg = "肥胖"
+        bmi_msg = "未知"
     return {**user_data, "bmi": round(bmi, 2), "bmi_msg": bmi_msg}
