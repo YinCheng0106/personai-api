@@ -1,6 +1,5 @@
 from pydantic import BaseModel, Field
 
-
 # 使用者資料模型
 class User(BaseModel):
     id: str = Field(..., description="使用者 ID")

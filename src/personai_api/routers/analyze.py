@@ -24,7 +24,6 @@ from src.personai_api.services.inbody import estimate_calories_per_rep
 
 router = APIRouter(tags=["生物力學分析"])
 
-
 @router.websocket("/ws/analyze/{exercise_type}")
 async def analyze_ws(
     websocket: WebSocket,

@@ -33,7 +33,6 @@ workout_db: dict[str, list[WorkoutRecord]] = {}
 
 USER_ID_PATTERN = r"^u\d{3}$"
 
-
 @router.get(
     "/{user_id}",
     summary="取得運動紀錄",

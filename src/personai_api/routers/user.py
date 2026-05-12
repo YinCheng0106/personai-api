@@ -10,7 +10,6 @@ user_db = {
     "u003": {"id": "u003", "name": "Ryan", "height": 170.0, "weight": 165.0},
 }
 
-
 @router.get("/{user_id}", response_model=User)
 async def get_user(user_id: str = Path(...)):
     user_data = user_db.get(user_id)

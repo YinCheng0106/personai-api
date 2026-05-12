@@ -4,7 +4,6 @@ from src.personai_api.models.server_schema import ServerStatus
 
 router = APIRouter(prefix="/server", tags=["伺服器"])
 
-
 # 伺服器狀態
 @router.get(
     path="",
