@@ -15,12 +15,12 @@ import json
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
-from src.personai_api.models.biomechanics_schema import (
+from personai_api.models.biomechanics_schema import (
     FrameInput,
     FrameOutput,
 )
-from src.personai_api.services.biomechanics import BiomechanicsAnalyzer, Point
-from src.personai_api.services.inbody import estimate_calories_per_rep
+from personai_api.services.biomechanics import BiomechanicsAnalyzer, Point
+from personai_api.services.inbody import estimate_calories_per_rep
 
 router = APIRouter(tags=["生物力學分析"])
 

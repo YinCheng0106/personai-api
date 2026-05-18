@@ -9,13 +9,13 @@ InBody 生理數據 API
 
 from fastapi import APIRouter, HTTPException, Path, status
 
-from src.personai_api.models.inbody_schema import (
+from personai_api.models.inbody_schema import (
     CalorieRequest,
     CalorieResponse,
     InBodyInput,
     InBodySummary,
 )
-from src.personai_api.services.inbody import (
+from personai_api.services.inbody import (
     ExerciseIntensity,
     ExerciseType,
     InBodyProfile,

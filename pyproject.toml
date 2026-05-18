@@ -65,3 +65,9 @@ exclude_lines = [
 
 [tool.fastapi]
 entrypoint = "personai_api.main:app"
+
+[tool.pyrefly]
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]

@@ -12,13 +12,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Path, status
 
-from src.personai_api.models.workout_schema import (
+from personai_api.models.workout_schema import (
     DailySummaryItem,
     WorkoutRecordInput,
     WorkoutRecordOutput,
     WorkoutSummaryItem,
 )
-from src.personai_api.services.inbody import (
+from personai_api.services.inbody import (
     ExerciseIntensity,
     ExerciseType,
     WorkoutRecord,

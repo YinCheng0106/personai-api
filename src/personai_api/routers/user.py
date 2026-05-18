@@ -1,10 +1,20 @@
+from typing import TypedDict
+
 from fastapi import APIRouter, HTTPException, Path
 
-from src.personai_api.models.user_schema import User
+from personai_api.models.user_schema import User
 
 router = APIRouter(prefix="/user", tags=["使用者"])
 
-user_db = {
+
+class UserRecord(TypedDict):
+    id: str
+    name: str
+    height: float
+    weight: float
+
+
+user_db: dict[str, UserRecord] = {
     "u001": {"id": "u001", "name": "Alex", "height": 175.0, "weight": 70.0},
     "u002": {"id": "u002", "name": "Eason", "height": 187.0, "weight": 75.0},
     "u003": {"id": "u003", "name": "Ryan", "height": 170.0, "weight": 165.0},

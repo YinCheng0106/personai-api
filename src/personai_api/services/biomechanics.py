@@ -66,10 +66,10 @@ def calculate_angle(a: tuple, b: tuple, c: tuple) -> float:
     -------
     float : 角度 (0~180 度)
     """
-    a, b, c = np.array(a[:2]), np.array(b[:2]), np.array(c[:2])
+    av, bv, cv = np.array(a[:2]), np.array(b[:2]), np.array(c[:2])
 
-    ba = a - b  # 向量 b→a
-    bc = c - b  # 向量 b→c
+    ba = av - bv  # 向量 b→a
+    bc = cv - bv  # 向量 b→c
 
     # 避免零向量造成除以零
     norm_ba = np.linalg.norm(ba)

@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from src.personai_api.routers import analyze, inbody, server, user, workout
+from personai_api.routers import analyze, inbody, server, user, workout
 
 app = FastAPI(title="PersonAI")  # API 主程式
 
