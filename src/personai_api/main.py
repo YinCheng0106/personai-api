@@ -1,8 +1,23 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from personai_api.routers import analyze, inbody, server, user, workout
 
 app = FastAPI(title="PersonAI")  # API 主程式
+
+# 本機前後端分離開發來源。allow_credentials=True 預留給後續 Session Cookie 串接。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://localhost:3000",
+        "https://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 掛載所有 router
 app.include_router(server.router)
