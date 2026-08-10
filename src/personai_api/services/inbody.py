@@ -288,6 +288,8 @@ def generate_workout_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
         "total_duration_min",
         "avg_reps_per_set",
         "error_rate",
+        "session_count",
+        "avg_form_score",
     ]
     if not records:
         return pd.DataFrame(columns=empty_cols)
@@ -303,6 +305,7 @@ def generate_workout_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
                 "calories": r.calories_burned,
                 "duration_sec": r.duration_sec,
                 "errors": r.errors_count,
+                "form_score": calculate_form_score(r.reps, r.errors_count),
             }
             for r in records
         ]
@@ -316,11 +319,14 @@ def generate_workout_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
             total_calories=("calories", "sum"),
             total_duration_sec=("duration_sec", "sum"),
             total_errors=("errors", "sum"),
+            session_count=("reps", "count"),
+            avg_form_score=("form_score", "mean"),
         )
         .reset_index()
     )
 
     summary["total_duration_min"] = (summary["total_duration_sec"] / 60.0).round(1)
+    summary["total_calories"] = summary["total_calories"].round(1)
     summary["avg_reps_per_set"] = np.where(
         summary["total_sets"] > 0,
         (summary["total_reps"] / summary["total_sets"]).round(1),
@@ -331,6 +337,7 @@ def generate_workout_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
         (summary["total_errors"] / summary["total_reps"]).round(3),
         0.0,
     )
+    summary["avg_form_score"] = summary["avg_form_score"].round(1)
     return summary.drop(columns=["total_duration_sec", "total_errors"])
 
 
@@ -342,7 +349,13 @@ def generate_daily_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
     """
     if not records:
         return pd.DataFrame(
-            columns=["date", "total_calories", "total_duration_min", "workout_count"]
+            columns=[
+                "date",
+                "total_calories",
+                "total_duration_min",
+                "workout_count",
+                "total_reps",
+            ]
         )
 
     df = pd.DataFrame(
@@ -351,6 +364,7 @@ def generate_daily_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
                 "date": r.timestamp[:10],  # "YYYY-MM-DD"
                 "calories": r.calories_burned,
                 "duration_sec": r.duration_sec,
+                "reps": r.reps,
             }
             for r in records
         ]
@@ -362,12 +376,21 @@ def generate_daily_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
             total_calories=("calories", "sum"),
             total_duration_sec=("duration_sec", "sum"),
             workout_count=("calories", "count"),
+            total_reps=("reps", "sum"),
         )
         .reset_index()
     )
 
     daily["total_duration_min"] = (daily["total_duration_sec"] / 60.0).round(1)
+    daily["total_calories"] = daily["total_calories"].round(1)
     return daily.drop(columns=["total_duration_sec"])
+
+
+def calculate_form_score(reps: int, errors_count: int) -> int:
+    """以錯誤事件占完成次數的比例產生 0-100 的 MVP 姿勢分數。"""
+    if reps <= 0:
+        return 100 if errors_count == 0 else 0
+    return max(0, min(100, round(100 * (1.0 - errors_count / reps))))
 
 
 # ============================================================

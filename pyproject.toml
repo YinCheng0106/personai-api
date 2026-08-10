@@ -27,6 +27,8 @@ dependencies = [
   "websockets>=12.0",          # 處理前端即時 keypoints 串流通訊
   "numpy>=1.26.4",             # 幾何角度與矩陣運算
   "pandas>=2.2.1",             # InBody 數據與運動紀錄處理
+  "sqlalchemy>=2.0.36",        # PostgreSQL / SQLite ORM 與持久化
+  "psycopg[binary]>=3.2.0",    # PostgreSQL driver
 ]
 
 [project.urls]
