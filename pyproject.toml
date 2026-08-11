@@ -29,6 +29,7 @@ dependencies = [
   "pandas>=2.2.1",             # InBody 數據與運動紀錄處理
   "sqlalchemy>=2.0.36",        # PostgreSQL / SQLite ORM 與持久化
   "psycopg[binary]>=3.2.0",    # PostgreSQL driver
+  "python-dotenv>=1.0.1",      # 載入本機未提交的 .env 設定
 ]
 
 [project.urls]

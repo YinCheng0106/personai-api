@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import dotenv
+
+dotenv.load_dotenv()
 from collections.abc import Generator
 
 from sqlalchemy import create_engine
