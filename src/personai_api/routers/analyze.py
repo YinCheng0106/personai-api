@@ -1,85 +1,104 @@
-"""
-生物力學分析 WebSocket API
+"""Authenticated real-time biomechanical analysis WebSocket."""
 
-端點：
-  WS /ws/analyze/{exercise_type} — 即時 keypoints 姿態分析
-
-前端串接流程：
-  1. 建立 WebSocket 連線，指定運動類型 (squat / pushup)
-  2. 前端每幀將 MediaPipe 偵測到的 33 個 keypoints 以 JSON 送出
-  3. 後端驗證 → 平滑濾波 → FSM 判定 → 回傳 JSON 結果
-  4. 前端接收 JSON 渲染 HUD（角度、次數、錯誤提示、卡路里）
-"""
+from __future__ import annotations
 
 import json
+import time
+from collections import deque
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 
-from personai_api.models.biomechanics_schema import (
-    FrameInput,
-    FrameOutput,
-)
+from personai_api.auth import CurrentUser, verify_token
+from personai_api.config import get_settings
+from personai_api.models.biomechanics_schema import FrameInput, FrameOutput
 from personai_api.services.biomechanics import BiomechanicsAnalyzer, Point
 from personai_api.services.inbody import estimate_calories_per_rep
 
 router = APIRouter(tags=["生物力學分析"])
+PROTOCOL = "personai.v1"
+active_users: set[str] = set()
+
+
+def _protocol_token(websocket: WebSocket) -> str | None:
+    protocols = [
+        item.strip()
+        for item in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        if item.strip()
+    ]
+    if len(protocols) != 2 or protocols[0] != PROTOCOL:
+        return None
+    return protocols[1]
+
+
+async def _authenticate(websocket: WebSocket) -> CurrentUser | None:
+    settings = get_settings()
+    origin = websocket.headers.get("origin")
+    if origin not in settings.cors_origins:
+        await websocket.close(code=4403, reason="Origin not allowed")
+        return None
+
+    token = _protocol_token(websocket)
+    if token is None:
+        await websocket.close(code=4401, reason="Authentication required")
+        return None
+    try:
+        return verify_token(token, settings)
+    except HTTPException:
+        await websocket.close(code=4401, reason="Invalid authentication")
+        return None
+
 
 @router.websocket("/ws/analyze/{exercise_type}")
 async def analyze_ws(
     websocket: WebSocket,
     exercise_type: str,
-    weight_kg: float = Query(default=70.0),
-):
-    """
-    即時 keypoints 姿態分析 WebSocket
+    weight_kg: float = Query(default=70.0, gt=0, le=500),
+) -> None:
+    current_user = await _authenticate(websocket)
+    if current_user is None:
+        return
+    if current_user.id in active_users:
+        await websocket.close(code=4409, reason="Only one active connection is allowed")
+        return
 
-    Parameters
-    ----------
-    exercise_type : str — "squat" 或 "pushup"
-    weight_kg : float — 使用者體重（公斤），用於卡路里計算，預設 70kg
-
-    前端送出格式（JSON）：
-        {
-            "keypoints": [
-                {"x": 0.5, "y": 0.3, "z": 0.0, "visibility": 0.99},
-                ...  // 共 33 個
-            ],
-            "timestamp": 1234567890.123  // 選填
-        }
-
-    後端回傳格式（JSON）：
-        {
-            "rep_count": 5,
-            "state": "descending",
-            "angles": {"left_knee": 95.2, ...},
-            "errors": ["膝蓋內扣：..."],
-            "confidence": 0.85,
-            "is_visible": true,
-            "calories": 12.5
-        }
-
-    控制指令：
-        { "action": "reset" }  — 重置計數器（開始新的一組）
-    """
-    await websocket.accept()
-
-    # 建立分析引擎
     try:
         analyzer = BiomechanicsAnalyzer(exercise_type=exercise_type)
     except ValueError:
-        await websocket.send_json({"error": f"不支援的運動類型: {exercise_type}"})
-        await websocket.close()
+        await websocket.close(code=4400, reason="Unsupported exercise type")
         return
 
+    active_users.add(current_user.id)
+    await websocket.accept(subprotocol=PROTOCOL)
+    settings = get_settings()
+    received_at: deque[float] = deque()
     last_rep_count = 0
     total_calories = 0.0
 
     try:
         while True:
             raw = await websocket.receive_text()
-            data = json.loads(raw)
+            if len(raw.encode("utf-8")) > settings.websocket_max_message_bytes:
+                await websocket.close(code=4400, reason="Message too large")
+                return
 
-            # 處理控制指令
+            now = time.monotonic()
+            while received_at and now - received_at[0] >= 1.0:
+                received_at.popleft()
+            received_at.append(now)
+            if len(received_at) > settings.websocket_max_frames_per_second:
+                await websocket.close(code=4429, reason="Frame rate limit exceeded")
+                return
+
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.close(code=4400, reason="Invalid JSON")
+                return
+            if not isinstance(data, dict):
+                await websocket.close(code=4400, reason="Invalid message")
+                return
+
             if data.get("action") == "reset":
                 analyzer.reset()
                 last_rep_count = 0
@@ -87,31 +106,29 @@ async def analyze_ws(
                 await websocket.send_json({"action": "reset", "status": "ok"})
                 continue
 
-            # Pydantic 驗證
+            started = time.perf_counter()
             try:
-                frame_input = FrameInput(**data)
-            except Exception as e:
-                await websocket.send_json({"error": f"輸入格式錯誤: {e}"})
-                continue
+                frame_input = FrameInput.model_validate(data)
+            except ValidationError:
+                await websocket.close(code=4400, reason="Invalid pose frame")
+                return
 
-            # 轉換為 list[Point]
             landmarks = [
                 Point(x=kp.x, y=kp.y, z=kp.z, visibility=kp.visibility)
                 for kp in frame_input.keypoints
             ]
-
-            # 分析
             result = analyzer.analyze(landmarks, frame_input.timestamp)
 
-            # 卡路里累計：每完成一次 rep 加算
             if result.rep_count > last_rep_count:
                 new_reps = result.rep_count - last_rep_count
-                cal_per_rep = estimate_calories_per_rep(exercise_type, weight_kg)
-                total_calories += cal_per_rep * new_reps
+                total_calories += (
+                    estimate_calories_per_rep(exercise_type, weight_kg) * new_reps
+                )
                 last_rep_count = result.rep_count
 
-            # 組裝回傳
             output = FrameOutput(
+                frame_id=frame_input.frame_id,
+                processing_ms=round((time.perf_counter() - started) * 1000, 3),
                 rep_count=result.rep_count,
                 state=result.state,
                 angles=result.angles,
@@ -121,6 +138,7 @@ async def analyze_ws(
                 calories=round(total_calories, 2),
             )
             await websocket.send_json(output.model_dump())
-
     except WebSocketDisconnect:
         pass
+    finally:
+        active_users.discard(current_user.id)

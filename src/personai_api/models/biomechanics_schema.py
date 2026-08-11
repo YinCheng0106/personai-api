@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+
 class KeypointIn(BaseModel):
     """單個關鍵點（MediaPipe Pose landmark）"""
 
@@ -16,15 +17,20 @@ class KeypointIn(BaseModel):
     z: float = 0.0
     visibility: float = 0.0
 
+
 class FrameInput(BaseModel):
     """單幀輸入：33 個 keypoints + 選填 timestamp"""
 
+    frame_id: int = Field(..., ge=0)
     keypoints: list[KeypointIn] = Field(..., min_length=33, max_length=33)
     timestamp: float | None = None
+
 
 class FrameOutput(BaseModel):
     """單幀分析結果"""
 
+    frame_id: int
+    processing_ms: float
     rep_count: int
     state: str
     angles: dict[str, float]
@@ -32,6 +38,7 @@ class FrameOutput(BaseModel):
     confidence: float
     is_visible: bool
     calories: float
+
 
 class ErrorOutput(BaseModel):
     """錯誤回傳"""

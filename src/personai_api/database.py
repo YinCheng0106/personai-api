@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import os
-import dotenv
-
-dotenv.load_dotenv()
 from collections.abc import Generator
+from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+# 本機開發時讀取專案根目錄的 .env；已存在的系統環境變數優先。
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 def _database_url() -> str:
@@ -34,13 +37,6 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 class Base(DeclarativeBase):
     pass
-
-
-def init_db() -> None:
-    # 匯入 model 以註冊 SQLAlchemy metadata。
-    from personai_api import db_models  # noqa: F401
-
-    Base.metadata.create_all(bind=engine)
 
 
 def get_db() -> Generator[Session, None, None]:

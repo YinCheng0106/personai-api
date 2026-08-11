@@ -70,22 +70,24 @@ The server starts at `http://localhost:8000` by default. Interactive API docs ar
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/server` | Server health check |
-| `GET` | `/user/{user_id}` | Get user profile with BMI |
-| `POST` | `/inbody/{user_id}` | Save / update InBody body composition data |
-| `GET` | `/inbody/{user_id}` | Get physiological summary (BMI, BMR, LBM) |
-| `POST` | `/inbody/{user_id}/calories` | Calculate exercise calorie expenditure |
-| `GET` | `/wk/{user_id}` | Get workout record list |
-| `POST` | `/wk/{user_id}/record` | Save a workout record |
-| `GET` | `/wk/{user_id}/summary` | Workout statistics (grouped by exercise type) |
-| `GET` | `/wk/{user_id}/daily` | Daily summary (for heatmaps and charts) |
+| `GET` | `/user/me` | Get identity from the verified JWT |
+| `POST` | `/inbody/me` | Save / update the signed-in user's InBody data |
+| `GET` | `/inbody/me` | Get the signed-in user's BMI, BMR, and LBM |
+| `POST` | `/inbody/me/calories` | Calculate exercise calorie expenditure |
+| `GET` | `/wk/me` | Get the signed-in user's workout records |
+| `POST` | `/wk/me/record` | Save a workout record |
+| `GET` | `/wk/me/summary` | Workout statistics by exercise type |
+| `GET` | `/wk/me/daily` | Daily summary for heatmaps and charts |
 
-> User ID format: lowercase `u` + 3 digits, e.g. `u001`
+All `/me` endpoints require `Authorization: Bearer <jwt>`. The user ID comes only from the verified JWT `sub`; client-supplied IDs are ignored.
 
 ### WebSocket API
 
 #### `WS /ws/analyze/{exercise_type}?weight_kg=70`
 
 Real-time biomechanical analysis. Each connection maintains its own independent FSM state and rep counter.
+
+The client must request WebSocket subprotocols `["personai.v1", "<jwt>"]`. The server validates the JWT and Origin before accepting, then replies with only `personai.v1`. Frames include `frame_id`; responses echo it and add `processing_ms`.
 
 **Query Parameters:**
 
@@ -193,11 +195,21 @@ Calories (kcal) = METs × Weight (kg) × Duration (hr)
 hatch run types:check
 
 # Run tests
-hatch run pytest
+hatch run test
+
+# Coverage (minimum 70%)
+hatch run test-cov
+
+# Apply application migrations
+hatch run alembic upgrade head
 
 # Run a specific test
 hatch run pytest tests/test_specific.py::test_name
 ```
+
+For an existing Supabase database that already has `workout_records` and `inbody_profiles`, first verify their columns, run `hatch run alembic stamp 0001`, then `hatch run alembic upgrade head`. This preserves existing `u001` rows and applies the RLS/Data API protection migration only.
+
+NAS deployment templates are provided in `Dockerfile`, `compose.production.yml`, `deploy/nginx.conf`, and `.env.production.example`. Replace example domains and certificate paths before use.
 
 ## Tech Stack
 

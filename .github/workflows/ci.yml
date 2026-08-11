@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: personai_test
+          POSTGRES_USER: personai
+          POSTGRES_PASSWORD: personai_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U personai -d personai_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://personai:personai_test_only@127.0.0.1:5432/personai_test
+      AUTH_ISSUER: http://127.0.0.1:3000
+      AUTH_AUDIENCE: personai-api
+      AUTH_JWKS_URL: http://127.0.0.1:3000/api/auth/jwks
+      CORS_ORIGINS: http://127.0.0.1:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install hatch
+      - run: hatch run lint
+      - run: hatch run types:check
+      - run: hatch run test-cov
+      - run: hatch run alembic upgrade head

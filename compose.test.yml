@@ -1,0 +1,14 @@
+services:
+  postgres-test:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: personai_test
+      POSTGRES_USER: personai
+      POSTGRES_PASSWORD: personai_test_only
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U personai -d personai_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

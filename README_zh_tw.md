@@ -69,22 +69,24 @@ fastapi dev src/personai_api/main.py
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | `GET` | `/server` | 伺服器健康檢查 |
-| `GET` | `/user/{user_id}` | 取得使用者資料與 BMI |
-| `POST` | `/inbody/{user_id}` | 儲存 / 更新 InBody 身體組成數據 |
-| `GET` | `/inbody/{user_id}` | 取得生理數據摘要 (BMI, BMR, LBM) |
-| `POST` | `/inbody/{user_id}/calories` | 計算特定運動消耗卡路里 |
-| `GET` | `/wk/{user_id}` | 取得運動紀錄列表 |
-| `POST` | `/wk/{user_id}/record` | 儲存單次運動紀錄 |
-| `GET` | `/wk/{user_id}/summary` | 運動統計報表（依類型分組） |
-| `GET` | `/wk/{user_id}/daily` | 每日統計摘要（供熱力圖使用） |
+| `GET` | `/user/me` | 從已驗證 JWT 取得目前使用者身分 |
+| `POST` | `/inbody/me` | 儲存／更新登入者的 InBody 數據 |
+| `GET` | `/inbody/me` | 取得登入者的 BMI、BMR、LBM |
+| `POST` | `/inbody/me/calories` | 計算特定運動消耗卡路里 |
+| `GET` | `/wk/me` | 取得登入者的運動紀錄 |
+| `POST` | `/wk/me/record` | 儲存單次運動紀錄 |
+| `GET` | `/wk/me/summary` | 依運動類型統計 |
+| `GET` | `/wk/me/daily` | 每日統計摘要（供熱力圖使用） |
 
-> User ID 格式：小寫 `u` + 3 位數字，例如 `u001`
+所有 `/me` 端點皆需 `Authorization: Bearer <jwt>`。使用者 ID 只讀取已驗證 JWT 的 `sub`，不接受前端自填 ID。
 
 ### WebSocket API
 
 #### `WS /ws/analyze/{exercise_type}?weight_kg=70`
 
 即時生物力學分析。每個連線維持獨立的 FSM 狀態與計數器。
+
+前端必須以 `["personai.v1", "<jwt>"]` 要求 WebSocket subprotocol。後端驗證 JWT 與 Origin 後才接受連線，並只回應 `personai.v1`。每幀需帶 `frame_id`，回應會帶回同值與 `processing_ms`。
 
 **Query Parameters:**
 
@@ -192,11 +194,21 @@ src/personai_api/
 hatch run types:check
 
 # 執行測試
-hatch run pytest
+hatch run test
+
+# Coverage（最低 70%）
+hatch run test-cov
+
+# 套用應用程式 migration
+hatch run alembic upgrade head
 
 # 執行單一測試
 hatch run pytest tests/test_specific.py::test_name
 ```
+
+若 Supabase 已有 `workout_records` 與 `inbody_profiles`，請先核對欄位，再執行 `hatch run alembic stamp 0001`，最後執行 `hatch run alembic upgrade head`。這會保留既有 `u001` 資料，只套用 RLS／Data API 保護 migration。
+
+NAS 部署範本位於 `Dockerfile`、`compose.production.yml`、`deploy/nginx.conf` 與 `.env.production.example`；使用前必須替換示範網域與憑證路徑。
 
 ## 技術棧
 

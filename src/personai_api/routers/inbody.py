@@ -1,10 +1,11 @@
 """InBody profile persistence and calorie estimation API."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from personai_api.auth import CurrentUser, get_current_user
 from personai_api.database import get_db
 from personai_api.db_models import InBodyProfileModel
 from personai_api.models.inbody_schema import (
@@ -22,7 +23,6 @@ from personai_api.services.inbody import (
 )
 
 router = APIRouter(prefix="/inbody", tags=["InBody 生理數據"])
-USER_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 
 
 def _profile_from_model(row: InBodyProfileModel) -> InBodyProfile:
@@ -45,48 +45,48 @@ def _summary(row: InBodyProfileModel) -> InBodySummary:
 
 
 @router.post(
-    "/{user_id}",
+    "/me",
     summary="儲存 InBody 資料",
     response_model=InBodySummary,
     status_code=status.HTTP_201_CREATED,
 )
 def save_inbody(
     data: InBodyInput,
-    user_id: str = Path(..., pattern=USER_ID_PATTERN),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    row = db.get(InBodyProfileModel, user_id)
+    row = db.get(InBodyProfileModel, current_user.id)
     values = data.model_dump()
     if row is None:
-        row = InBodyProfileModel(user_id=user_id, **values)
+        row = InBodyProfileModel(user_id=current_user.id, **values)
         db.add(row)
     else:
         for key, value in values.items():
             setattr(row, key, value)
-        row.measured_at = datetime.now(timezone.utc)
+        row.measured_at = datetime.now(UTC)
     db.commit()
     db.refresh(row)
     return _summary(row)
 
 
-@router.get("/{user_id}", response_model=InBodySummary)
+@router.get("/me", response_model=InBodySummary)
 def get_inbody(
-    user_id: str = Path(..., pattern=USER_ID_PATTERN),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    row = db.get(InBodyProfileModel, user_id)
+    row = db.get(InBodyProfileModel, current_user.id)
     if row is None:
         raise HTTPException(status_code=404, detail="找不到該使用者的 InBody 資料")
     return _summary(row)
 
 
-@router.post("/{user_id}/calories", response_model=CalorieResponse)
+@router.post("/me/calories", response_model=CalorieResponse)
 def calculate_exercise_calories(
     data: CalorieRequest,
-    user_id: str = Path(..., pattern=USER_ID_PATTERN),
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    row = db.get(InBodyProfileModel, user_id)
+    row = db.get(InBodyProfileModel, current_user.id)
     if row is None:
         raise HTTPException(
             status_code=404,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 import pandas as pd
@@ -19,14 +19,14 @@ import pandas as pd
 # ============================================================
 # 運動類型 & 強度定義
 # ============================================================
-class ExerciseType(str, Enum):
+class ExerciseType(StrEnum):
     """系統支援的運動類型"""
 
     SQUAT = "squat"  # 深蹲
     PUSH_UP = "pushup"  # 伏地挺身
 
 
-class ExerciseIntensity(str, Enum):
+class ExerciseIntensity(StrEnum):
     """運動強度等級（根據動作速度與角度範圍動態判定）"""
 
     LIGHT = "light"  # 輕度（慢速 / 淺幅度）
