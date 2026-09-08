@@ -12,10 +12,10 @@ from pydantic import BaseModel, Field
 class KeypointIn(BaseModel):
     """單個關鍵點（MediaPipe Pose landmark）"""
 
-    x: float
-    y: float
-    z: float = 0.0
-    visibility: float = 0.0
+    x: float = Field(..., allow_inf_nan=False)
+    y: float = Field(..., allow_inf_nan=False)
+    z: float = Field(0.0, allow_inf_nan=False)
+    visibility: float = Field(0.0, ge=0, le=1, allow_inf_nan=False)
 
 
 class FrameInput(BaseModel):
@@ -23,7 +23,7 @@ class FrameInput(BaseModel):
 
     frame_id: int = Field(..., ge=0)
     keypoints: list[KeypointIn] = Field(..., min_length=33, max_length=33)
-    timestamp: float | None = None
+    timestamp: float | None = Field(None, allow_inf_nan=False)
 
 
 class FrameOutput(BaseModel):
