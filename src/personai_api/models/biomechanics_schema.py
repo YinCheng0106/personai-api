@@ -28,6 +28,12 @@ class FrameInput(BaseModel):
     keypoints: list[KeypointIn] = Field(..., min_length=33, max_length=33)
     timestamp: float | None = Field(None, allow_inf_nan=False)
 
+class PoseMissingInput(BaseModel):
+    """MediaPipe completed a frame but detected no pose."""
+
+    kind: Literal["pose_missing"]
+    frame_id: int = Field(..., ge=0)
+    timestamp: float | None = Field(None, allow_inf_nan=False)
 
 class FrameOutput(BaseModel):
     """單幀分析結果"""

@@ -77,9 +77,8 @@ async def analyze_ws(
     settings = get_settings()
     received_at: deque[float] = deque()
     last_rep_count = 0
-    last_frame_id: int | None = None
-    total_calories = 0.0
     last_frame_id = -1
+    total_calories = 0.0
 
     try:
         while True:
@@ -126,11 +125,6 @@ async def analyze_ws(
                 await websocket.close(code=4400, reason="Invalid pose frame")
                 return
             if frame_input.frame_id <= last_frame_id:
-                await websocket.close(code=4400, reason="Frame ID must increase")
-                return
-            last_frame_id = frame_input.frame_id
-
-            if last_frame_id is not None and frame_input.frame_id <= last_frame_id:
                 await websocket.close(code=4400, reason="Frame ID must increase")
                 return
             last_frame_id = frame_input.frame_id
