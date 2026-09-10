@@ -87,6 +87,28 @@ def test_forged_signature_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         verify_token(forged, SETTINGS)
 
 
+def test_jwks_connection_is_retried_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingJwksClient:
+        def get_signing_key_from_jwt(self, _: str):
+            raise jwt.PyJWKClientConnectionError("temporary tunnel failure")
+
+    clients = iter((FailingJwksClient(), FakeJwksClient()))
+    cache_cleared = False
+
+    def fake_jwks_client(_: str):
+        return next(clients)
+
+    def clear_cache() -> None:
+        nonlocal cache_cleared
+        cache_cleared = True
+
+    fake_jwks_client.cache_clear = clear_cache  # type: ignore[attr-defined]
+    monkeypatch.setattr(auth_module, "_jwks_client", fake_jwks_client)
+
+    assert verify_token(_token(), SETTINGS).id == "00000000-0000-4000-8000-000000000001"
+    assert cache_cleared is True
+
+
 def test_rest_endpoint_requires_bearer_token() -> None:
     with TestClient(app) as client:
         response = client.get("/wk/me")

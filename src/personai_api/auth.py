@@ -26,13 +26,29 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 @lru_cache
 def _jwks_client(url: str) -> PyJWKClient:
-    return PyJWKClient(url, cache_keys=True, lifespan=300)
+    return PyJWKClient(
+        url,
+        cache_keys=True,
+        lifespan=300,
+        headers={"User-Agent": "PersonAI-API/1.0"},
+        timeout=10,
+    )
+
+
+def _get_signing_key(token: str, jwks_url: str) -> Any:
+    try:
+        return _jwks_client(jwks_url).get_signing_key_from_jwt(token)
+    except jwt.PyJWKClientConnectionError:
+        # A Cloudflare Tunnel or network hiccup must not permanently poison a
+        # cached client. Retry the current request once with a fresh client.
+        _jwks_client.cache_clear()
+        return _jwks_client(jwks_url).get_signing_key_from_jwt(token)
 
 
 def verify_token(token: str, settings: Settings | None = None) -> CurrentUser:
     config = settings or get_settings()
     try:
-        signing_key = _jwks_client(config.auth_jwks_url).get_signing_key_from_jwt(token)
+        signing_key = _get_signing_key(token, config.auth_jwks_url)
         payload: dict[str, Any] = jwt.decode(
             token,
             signing_key.key,

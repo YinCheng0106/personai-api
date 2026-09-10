@@ -5,6 +5,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# REST/WebSocket authentication settings are read before database modules are
+# necessarily imported, so load the project environment at this boundary.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 def _csv_env(name: str, default: str) -> tuple[str, ...]:

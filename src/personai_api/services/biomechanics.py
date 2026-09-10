@@ -16,24 +16,18 @@ from typing import NamedTuple
 
 import numpy as np
 
-
-# ============================================================
-# 常數：MediaPipe Pose 33 個關鍵點索引（僅列出本專案常用點位）
-# ============================================================
-class PoseLandmark(enum.IntEnum):
-    NOSE = 0
-    LEFT_SHOULDER = 11
-    RIGHT_SHOULDER = 12
-    LEFT_ELBOW = 13
-    RIGHT_ELBOW = 14
-    LEFT_WRIST = 15
-    RIGHT_WRIST = 16
-    LEFT_HIP = 23
-    RIGHT_HIP = 24
-    LEFT_KNEE = 25
-    RIGHT_KNEE = 26
-    LEFT_ANKLE = 27
-    RIGHT_ANKLE = 28
+from personai_api.services.pose_visibility import (
+    POSE_VISIBILITY_POLICIES,
+    VISIBILITY_THRESHOLDS,
+    ExerciseVisibilityPolicy,
+    FormErrorCode,
+    PoseLandmark,
+    TrackingHintCode,
+    TrackingState,
+    VisibilityThresholds,
+    meets_visibility_threshold,
+    visibility_statistics,
+)
 
 
 # ============================================================
@@ -51,7 +45,7 @@ class Point(NamedTuple):
 # ============================================================
 # 數學工具：三點角度計算 (NumPy 向量運算)
 # ============================================================
-def calculate_angle(a: tuple, b: tuple, c: tuple) -> float:
+def calculate_angle(a: tuple, b: tuple, c: tuple) -> float | None:
     """
     計算 a→b→c 三點所構成的夾角（以 b 為頂點）
 
@@ -64,7 +58,7 @@ def calculate_angle(a: tuple, b: tuple, c: tuple) -> float:
 
     Returns
     -------
-    float : 角度 (0~180 度)
+    float | None : 角度 (0~180 度)；退化向量無法計算時為 None
     """
     av, bv, cv = np.array(a[:2]), np.array(b[:2]), np.array(c[:2])
 
@@ -75,7 +69,7 @@ def calculate_angle(a: tuple, b: tuple, c: tuple) -> float:
     norm_ba = np.linalg.norm(ba)
     norm_bc = np.linalg.norm(bc)
     if norm_ba == 0 or norm_bc == 0:
-        return 0.0
+        return None
 
     cosine = np.dot(ba, bc) / (norm_ba * norm_bc)
     # np.clip 防止浮點誤差超出 arccos 定義域 [-1, 1]
@@ -176,10 +170,16 @@ class LandmarkSmoother:
             for _ in range(num_landmarks)
         ]
 
-    def smooth(self, landmarks: list[Point], t: float | None = None) -> list[Point]:
+    def smooth(
+        self,
+        landmarks: list[Point],
+        t: float | None = None,
+        update_indices: frozenset[int] | None = None,
+    ) -> list[Point]:
         smoothed = []
         for i, lm in enumerate(landmarks):
-            if i < len(self._filters):
+            should_update = update_indices is None or i in update_indices
+            if i < len(self._filters) and should_update:
                 fx, fy = self._filters[i]
                 smoothed.append(Point(fx(lm.x, t), fy(lm.y, t), lm.z, lm.visibility))
             else:
@@ -245,10 +245,15 @@ class SquatFSM:
         self._reached_bottom = False
         self._errors: list[str] = []
 
-    def update(self, landmarks: list[Point]) -> tuple[SquatState, int, list[str]]:
+    def update(
+        self,
+        landmarks: list[Point],
+        enabled_rules: frozenset[FormErrorCode] | None = None,
+    ) -> tuple[SquatState, int, list[str]]:
         """根據當前幀的關鍵點更新狀態機，回傳 (state, rep_count, errors)"""
         self._errors = []
         cfg = self.config
+        rules = enabled_rules if enabled_rules is not None else frozenset(FormErrorCode)
 
         # --- 1. 擷取關鍵點 ---
         l_hip = landmarks[PoseLandmark.LEFT_HIP]
@@ -261,29 +266,32 @@ class SquatFSM:
         r_shoulder = landmarks[PoseLandmark.RIGHT_SHOULDER]
 
         # --- 2. 計算關節角度（取左右平均） ---
-        knee_angle = (
-            calculate_angle(
-                (l_hip.x, l_hip.y), (l_knee.x, l_knee.y), (l_ankle.x, l_ankle.y)
-            )
-            + calculate_angle(
-                (r_hip.x, r_hip.y), (r_knee.x, r_knee.y), (r_ankle.x, r_ankle.y)
-            )
-        ) / 2
+        left_knee_angle = calculate_angle(
+            (l_hip.x, l_hip.y), (l_knee.x, l_knee.y), (l_ankle.x, l_ankle.y)
+        )
+        right_knee_angle = calculate_angle(
+            (r_hip.x, r_hip.y), (r_knee.x, r_knee.y), (r_ankle.x, r_ankle.y)
+        )
+        if left_knee_angle is None or right_knee_angle is None:
+            return self.state, self.rep_count, self._errors
+        knee_angle = (left_knee_angle + right_knee_angle) / 2
 
         # --- 3. 錯誤偵測 ---
         # 膝蓋內扣：膝蓋間距 vs 髖部間距
-        knee_dist = abs(l_knee.x - r_knee.x)
-        hip_dist = abs(l_hip.x - r_hip.x)
-        if hip_dist > 0 and knee_dist / hip_dist < cfg.knee_valgus_ratio:
-            self._errors.append("膝蓋內扣：請將膝蓋對齊腳尖方向")
+        if FormErrorCode.SQUAT_KNEE_VALGUS in rules:
+            knee_dist = abs(l_knee.x - r_knee.x)
+            hip_dist = abs(l_hip.x - r_hip.x)
+            if hip_dist > 0 and knee_dist / hip_dist < cfg.knee_valgus_ratio:
+                self._errors.append(FormErrorCode.SQUAT_KNEE_VALGUS.value)
 
         # 軀幹前傾：肩膀中點-髖部中點 vs 垂直線
         mid_sh = ((l_shoulder.x + r_shoulder.x) / 2, (l_shoulder.y + r_shoulder.y) / 2)
         mid_hp = ((l_hip.x + r_hip.x) / 2, (l_hip.y + r_hip.y) / 2)
         vertical = (mid_hp[0], mid_hp[1] - 0.3)  # 正上方虛擬點
-        torso_angle = calculate_angle(mid_sh, mid_hp, vertical)
-        if torso_angle > cfg.torso_lean_max:
-            self._errors.append("軀幹過度前傾：請保持挺胸")
+        if FormErrorCode.SQUAT_TORSO_LEAN in rules:
+            torso_angle = calculate_angle(mid_sh, mid_hp, vertical)
+            if torso_angle is not None and torso_angle > cfg.torso_lean_max:
+                self._errors.append(FormErrorCode.SQUAT_TORSO_LEAN.value)
 
         # --- 4. FSM 狀態轉換 ---
         if self.state == SquatState.IDLE:
@@ -296,7 +304,8 @@ class SquatFSM:
                 self.state = SquatState.BOTTOM
                 self._reached_bottom = True
             elif knee_angle > cfg.knee_standing_angle:
-                self._errors.append("深度不足：請蹲得再低一些")
+                if FormErrorCode.SQUAT_DEPTH_INSUFFICIENT in rules:
+                    self._errors.append(FormErrorCode.SQUAT_DEPTH_INSUFFICIENT.value)
                 self.state = SquatState.IDLE
 
         elif self.state == SquatState.BOTTOM:
@@ -311,11 +320,14 @@ class SquatFSM:
 
         return self.state, self.rep_count, self._errors
 
-    def reset(self):
+    def abandon_cycle(self) -> None:
         self.state = SquatState.IDLE
-        self.rep_count = 0
         self._reached_bottom = False
         self._errors = []
+
+    def reset(self) -> None:
+        self.abandon_cycle()
+        self.rep_count = 0
 
 
 # ============================================================
@@ -348,9 +360,14 @@ class PushUpFSM:
         self._reached_bottom = False
         self._errors: list[str] = []
 
-    def update(self, landmarks: list[Point]) -> tuple[PushUpState, int, list[str]]:
+    def update(
+        self,
+        landmarks: list[Point],
+        enabled_rules: frozenset[FormErrorCode] | None = None,
+    ) -> tuple[PushUpState, int, list[str]]:
         self._errors = []
         cfg = self.config
+        rules = enabled_rules if enabled_rules is not None else frozenset(FormErrorCode)
 
         # --- 擷取關鍵點 ---
         l_sh = landmarks[PoseLandmark.LEFT_SHOULDER]
@@ -365,28 +382,49 @@ class PushUpFSM:
         r_ak = landmarks[PoseLandmark.RIGHT_ANKLE]
 
         # --- 肘部角度（左右平均）---
-        elbow_angle = (
-            calculate_angle((l_sh.x, l_sh.y), (l_el.x, l_el.y), (l_wr.x, l_wr.y))
-            + calculate_angle((r_sh.x, r_sh.y), (r_el.x, r_el.y), (r_wr.x, r_wr.y))
-        ) / 2
-
-        # --- 身體直線度（肩-髖-踝，左右平均）---
-        body_angle = (
-            calculate_angle((l_sh.x, l_sh.y), (l_hp.x, l_hp.y), (l_ak.x, l_ak.y))
-            + calculate_angle((r_sh.x, r_sh.y), (r_hp.x, r_hp.y), (r_ak.x, r_ak.y))
-        ) / 2
+        left_elbow_angle = calculate_angle(
+            (l_sh.x, l_sh.y), (l_el.x, l_el.y), (l_wr.x, l_wr.y)
+        )
+        right_elbow_angle = calculate_angle(
+            (r_sh.x, r_sh.y), (r_el.x, r_el.y), (r_wr.x, r_wr.y)
+        )
+        if left_elbow_angle is None or right_elbow_angle is None:
+            return self.state, self.rep_count, self._errors
+        elbow_angle = (left_elbow_angle + right_elbow_angle) / 2
 
         # --- 錯誤偵測 ---
-        if body_angle < cfg.body_alignment_min:
+        alignment_rules = frozenset(
+            {
+                FormErrorCode.PUSHUP_HIP_SAG,
+                FormErrorCode.PUSHUP_HIP_PIKE,
+            }
+        )
+        if rules & alignment_rules:
+            left_body_angle = calculate_angle(
+                (l_sh.x, l_sh.y), (l_hp.x, l_hp.y), (l_ak.x, l_ak.y)
+            )
+            right_body_angle = calculate_angle(
+                (r_sh.x, r_sh.y), (r_hp.x, r_hp.y), (r_ak.x, r_ak.y)
+            )
+            body_angle = (
+                (left_body_angle + right_body_angle) / 2
+                if left_body_angle is not None and right_body_angle is not None
+                else None
+            )
+        else:
+            body_angle = None
+
+        if body_angle is not None and body_angle < cfg.body_alignment_min:
             mid_sh_y = (l_sh.y + r_sh.y) / 2
             mid_hp_y = (l_hp.y + r_hp.y) / 2
             mid_ak_y = (l_ak.y + r_ak.y) / 2
             expected_y = (mid_sh_y + mid_ak_y) / 2
             # MediaPipe y 軸向下遞增
             if mid_hp_y > expected_y:
-                self._errors.append("身體下沉：請收緊核心保持身體成一直線")
-            else:
-                self._errors.append("臀部過高：請放低臀部保持身體成一直線")
+                if FormErrorCode.PUSHUP_HIP_SAG in rules:
+                    self._errors.append(FormErrorCode.PUSHUP_HIP_SAG.value)
+            elif FormErrorCode.PUSHUP_HIP_PIKE in rules:
+                self._errors.append(FormErrorCode.PUSHUP_HIP_PIKE.value)
 
         # --- FSM 狀態轉換 ---
         if self.state == PushUpState.UP:
@@ -399,7 +437,8 @@ class PushUpFSM:
                 self.state = PushUpState.BOTTOM
                 self._reached_bottom = True
             elif elbow_angle > cfg.elbow_up_angle:
-                self._errors.append("深度不足：請再往下壓低一些")
+                if FormErrorCode.PUSHUP_DEPTH_INSUFFICIENT in rules:
+                    self._errors.append(FormErrorCode.PUSHUP_DEPTH_INSUFFICIENT.value)
                 self.state = PushUpState.UP
 
         elif self.state == PushUpState.BOTTOM:
@@ -414,11 +453,14 @@ class PushUpFSM:
 
         return self.state, self.rep_count, self._errors
 
-    def reset(self):
+    def abandon_cycle(self) -> None:
         self.state = PushUpState.UP
-        self.rep_count = 0
         self._reached_bottom = False
         self._errors = []
+
+    def reset(self) -> None:
+        self.abandon_cycle()
+        self.rep_count = 0
 
 
 # ============================================================
@@ -428,27 +470,34 @@ class BiomechanicsAnalyzer:
     """
     生物力學分析引擎 — 接收前端 keypoints，進行角度計算與 FSM 判定
 
-    Parameters
-    ----------
-    exercise_type : "squat" 或 "pushup"
-    min_confidence : 最低信心分數，低於此值提示調整位置
+    The visibility guard owns whether a frame can reach filtering, geometry, or FSM.
+    Visibility thresholds are provisional and centralized in ``pose_visibility``.
     """
 
     def __init__(
         self,
         exercise_type: str = "squat",
-        min_confidence: float = 0.5,
+        visibility_thresholds: VisibilityThresholds = VISIBILITY_THRESHOLDS,
     ):
+        try:
+            self.policy: ExerciseVisibilityPolicy = POSE_VISIBILITY_POLICIES[
+                exercise_type
+            ]
+        except KeyError as exc:
+            raise ValueError(f"不支援的運動類型: {exercise_type}") from exc
+
         self.exercise_type = exercise_type
-        self.min_confidence = min_confidence
+        self.visibility_thresholds = visibility_thresholds
         self._smoother = LandmarkSmoother(freq=30.0, min_cutoff=1.0, beta=0.007)
+        self.tracking_state = TrackingState.ACQUIRING
+        self._consecutive_valid_frames = 0
+        self._invalid_since: float | None = None
+        self._movement_interrupted = False
 
         if exercise_type == "squat":
             self._fsm: SquatFSM | PushUpFSM = SquatFSM()
-        elif exercise_type == "pushup":
-            self._fsm = PushUpFSM()
         else:
-            raise ValueError(f"不支援的運動類型: {exercise_type}")
+            self._fsm = PushUpFSM()
 
     def analyze(
         self, landmarks: list[Point], timestamp: float | None = None
@@ -461,112 +510,253 @@ class BiomechanicsAnalyzer:
         landmarks : list[Point] — 33 個關鍵點（由前端 MediaPipe 偵測）
         timestamp : float | None — 時間戳記（秒），用於濾波器頻率估算
         """
-        t = timestamp if timestamp is not None else time.time()
+        t = timestamp if timestamp is not None else time.monotonic()
+        _, confidence = visibility_statistics(landmarks, self.policy.counting)
+        acquiring = self.tracking_state != TrackingState.ACTIVE
+        minimum = (
+            self.visibility_thresholds.enter_minimum
+            if acquiring
+            else self.visibility_thresholds.stay_minimum
+        )
+        mean = (
+            self.visibility_thresholds.enter_mean
+            if acquiring
+            else self.visibility_thresholds.stay_mean
+        )
+        is_count_valid = meets_visibility_threshold(
+            landmarks,
+            self.policy.counting,
+            minimum=minimum,
+            mean=mean,
+        )
 
-        # Step 1: 信心分數
-        confidence = self._get_average_confidence(landmarks)
-        is_visible = self._is_fully_visible(landmarks, self.min_confidence)
+        if not is_count_valid:
+            return self._handle_unavailable(
+                t,
+                confidence=confidence,
+                hint=self.policy.unavailable_hint,
+            )
 
-        # Step 2: One-Euro Filter 平滑
-        landmarks = self._smoother.smooth(landmarks, t)
+        if self.tracking_state != TrackingState.ACTIVE:
+            if self.tracking_state in {TrackingState.PAUSED, TrackingState.LOST}:
+                self.tracking_state = TrackingState.ACQUIRING
+            self._invalid_since = None
+            self._consecutive_valid_frames += 1
+            if (
+                self._consecutive_valid_frames
+                < self.visibility_thresholds.consecutive_valid_frames
+            ):
+                return self._unavailable_result(
+                    confidence=confidence,
+                    hint=TrackingHintCode.REACQUIRING_POSE,
+                )
 
-        # Step 3: FSM 更新
-        state, rep_count, errors = self._fsm.update(landmarks)
+            if self._movement_interrupted:
+                self._fsm.abandon_cycle()
+                self._movement_interrupted = False
+            self.tracking_state = TrackingState.ACTIVE
 
-        if not is_visible:
-            errors.append("請調整位置，確保全身在畫面中")
+        self._consecutive_valid_frames = (
+            self.visibility_thresholds.consecutive_valid_frames
+        )
+        self._invalid_since = None
 
-        # Step 4: 計算角度供前端 HUD
-        angles = self._compute_angles(landmarks)
+        enabled_rules = frozenset(
+            error_code
+            for error_code, dependencies in self.policy.form_errors.items()
+            if meets_visibility_threshold(
+                landmarks,
+                dependencies,
+                minimum=self.visibility_thresholds.stay_minimum,
+                mean=self.visibility_thresholds.stay_mean,
+            )
+        )
+        enabled_angles = frozenset(
+            name
+            for name, dependencies in self.policy.angles.items()
+            if meets_visibility_threshold(
+                landmarks,
+                dependencies,
+                minimum=self.visibility_thresholds.stay_minimum,
+                mean=self.visibility_thresholds.stay_mean,
+            )
+        )
+        relevant_landmarks = frozenset(
+            int(index)
+            for dependencies in (
+                [self.policy.counting]
+                + list(self.policy.form_errors.values())
+                + list(self.policy.angles.values())
+            )
+            for index in dependencies
+            if landmarks[index].visibility >= self.visibility_thresholds.stay_minimum
+        )
+
+        # Authoritative order: visibility guard -> filter -> geometry/FSM/errors.
+        smoothed = self._smoother.smooth(
+            landmarks,
+            t,
+            update_indices=relevant_landmarks,
+        )
+        state, rep_count, form_errors = self._fsm.update(smoothed, enabled_rules)
+        angles = self._compute_angles(smoothed, enabled_angles)
 
         return AnalysisResult(
             rep_count=rep_count,
             state=state.value,
             angles=angles,
-            errors=errors,
+            form_errors=form_errors,
+            tracking_hints=[],
             confidence=round(confidence, 2),
-            is_visible=is_visible,
+            is_visible=True,
+            tracking_state=self.tracking_state.value,
         )
 
-    def _compute_angles(self, lm: list[Point]) -> dict[str, float]:
-        """計算相關角度（依運動類型不同）"""
-        angles: dict[str, float] = {}
+    def pose_missing(self, timestamp: float | None = None) -> AnalysisResult:
+        """Record an explicit MediaPipe no-pose observation."""
+
+        t = timestamp if timestamp is not None else time.monotonic()
+        return self._handle_unavailable(
+            t,
+            confidence=0.0,
+            hint=TrackingHintCode.POSE_NOT_FOUND,
+        )
+
+    def _handle_unavailable(
+        self,
+        timestamp: float,
+        *,
+        confidence: float,
+        hint: TrackingHintCode,
+    ) -> AnalysisResult:
+        self._consecutive_valid_frames = 0
+        if self._invalid_since is None:
+            self._invalid_since = timestamp
+
+        if self.tracking_state == TrackingState.ACTIVE:
+            self.tracking_state = TrackingState.PAUSED
+            self._movement_interrupted = True
+
+        elapsed = max(0.0, timestamp - self._invalid_since)
+        if (
+            self.tracking_state != TrackingState.LOST
+            and elapsed >= self.visibility_thresholds.lost_after_seconds
+        ):
+            self.tracking_state = TrackingState.LOST
+            self._fsm.abandon_cycle()
+            self._smoother.reset()
+            self._movement_interrupted = False
+
+        return self._unavailable_result(confidence=confidence, hint=hint)
+
+    def _unavailable_result(
+        self,
+        *,
+        confidence: float,
+        hint: TrackingHintCode,
+    ) -> AnalysisResult:
+        return AnalysisResult(
+            rep_count=self._fsm.rep_count,
+            state=self._fsm.state.value,
+            angles={name: None for name in self.policy.angles},
+            form_errors=[],
+            tracking_hints=[hint.value],
+            confidence=round(confidence, 2),
+            is_visible=False,
+            tracking_state=self.tracking_state.value,
+        )
+
+    def _compute_angles(
+        self,
+        lm: list[Point],
+        enabled_angles: frozenset[str],
+    ) -> dict[str, float | None]:
+        """Compute only angles whose explicit landmark dependencies are valid."""
+
+        angles: dict[str, float | None] = {name: None for name in self.policy.angles}
 
         if self.exercise_type == "squat":
-            angles["left_knee"] = calculate_angle(
-                (lm[PoseLandmark.LEFT_HIP].x, lm[PoseLandmark.LEFT_HIP].y),
-                (lm[PoseLandmark.LEFT_KNEE].x, lm[PoseLandmark.LEFT_KNEE].y),
-                (lm[PoseLandmark.LEFT_ANKLE].x, lm[PoseLandmark.LEFT_ANKLE].y),
-            )
-            angles["right_knee"] = calculate_angle(
-                (lm[PoseLandmark.RIGHT_HIP].x, lm[PoseLandmark.RIGHT_HIP].y),
-                (lm[PoseLandmark.RIGHT_KNEE].x, lm[PoseLandmark.RIGHT_KNEE].y),
-                (lm[PoseLandmark.RIGHT_ANKLE].x, lm[PoseLandmark.RIGHT_ANKLE].y),
-            )
-            angles["left_hip"] = calculate_angle(
-                (lm[PoseLandmark.LEFT_SHOULDER].x, lm[PoseLandmark.LEFT_SHOULDER].y),
-                (lm[PoseLandmark.LEFT_HIP].x, lm[PoseLandmark.LEFT_HIP].y),
-                (lm[PoseLandmark.LEFT_KNEE].x, lm[PoseLandmark.LEFT_KNEE].y),
-            )
-            angles["right_hip"] = calculate_angle(
-                (lm[PoseLandmark.RIGHT_SHOULDER].x, lm[PoseLandmark.RIGHT_SHOULDER].y),
-                (lm[PoseLandmark.RIGHT_HIP].x, lm[PoseLandmark.RIGHT_HIP].y),
-                (lm[PoseLandmark.RIGHT_KNEE].x, lm[PoseLandmark.RIGHT_KNEE].y),
-            )
+            if "left_knee" in enabled_angles:
+                angles["left_knee"] = calculate_angle(
+                    (lm[PoseLandmark.LEFT_HIP].x, lm[PoseLandmark.LEFT_HIP].y),
+                    (lm[PoseLandmark.LEFT_KNEE].x, lm[PoseLandmark.LEFT_KNEE].y),
+                    (lm[PoseLandmark.LEFT_ANKLE].x, lm[PoseLandmark.LEFT_ANKLE].y),
+                )
+            if "right_knee" in enabled_angles:
+                angles["right_knee"] = calculate_angle(
+                    (lm[PoseLandmark.RIGHT_HIP].x, lm[PoseLandmark.RIGHT_HIP].y),
+                    (lm[PoseLandmark.RIGHT_KNEE].x, lm[PoseLandmark.RIGHT_KNEE].y),
+                    (lm[PoseLandmark.RIGHT_ANKLE].x, lm[PoseLandmark.RIGHT_ANKLE].y),
+                )
+            if "left_hip" in enabled_angles:
+                angles["left_hip"] = calculate_angle(
+                    (
+                        lm[PoseLandmark.LEFT_SHOULDER].x,
+                        lm[PoseLandmark.LEFT_SHOULDER].y,
+                    ),
+                    (lm[PoseLandmark.LEFT_HIP].x, lm[PoseLandmark.LEFT_HIP].y),
+                    (lm[PoseLandmark.LEFT_KNEE].x, lm[PoseLandmark.LEFT_KNEE].y),
+                )
+            if "right_hip" in enabled_angles:
+                angles["right_hip"] = calculate_angle(
+                    (
+                        lm[PoseLandmark.RIGHT_SHOULDER].x,
+                        lm[PoseLandmark.RIGHT_SHOULDER].y,
+                    ),
+                    (lm[PoseLandmark.RIGHT_HIP].x, lm[PoseLandmark.RIGHT_HIP].y),
+                    (lm[PoseLandmark.RIGHT_KNEE].x, lm[PoseLandmark.RIGHT_KNEE].y),
+                )
         elif self.exercise_type == "pushup":
-            angles["left_elbow"] = calculate_angle(
-                (lm[PoseLandmark.LEFT_SHOULDER].x, lm[PoseLandmark.LEFT_SHOULDER].y),
-                (lm[PoseLandmark.LEFT_ELBOW].x, lm[PoseLandmark.LEFT_ELBOW].y),
-                (lm[PoseLandmark.LEFT_WRIST].x, lm[PoseLandmark.LEFT_WRIST].y),
-            )
-            angles["right_elbow"] = calculate_angle(
-                (lm[PoseLandmark.RIGHT_SHOULDER].x, lm[PoseLandmark.RIGHT_SHOULDER].y),
-                (lm[PoseLandmark.RIGHT_ELBOW].x, lm[PoseLandmark.RIGHT_ELBOW].y),
-                (lm[PoseLandmark.RIGHT_WRIST].x, lm[PoseLandmark.RIGHT_WRIST].y),
-            )
-            angles["left_body"] = calculate_angle(
-                (lm[PoseLandmark.LEFT_SHOULDER].x, lm[PoseLandmark.LEFT_SHOULDER].y),
-                (lm[PoseLandmark.LEFT_HIP].x, lm[PoseLandmark.LEFT_HIP].y),
-                (lm[PoseLandmark.LEFT_ANKLE].x, lm[PoseLandmark.LEFT_ANKLE].y),
-            )
-            angles["right_body"] = calculate_angle(
-                (lm[PoseLandmark.RIGHT_SHOULDER].x, lm[PoseLandmark.RIGHT_SHOULDER].y),
-                (lm[PoseLandmark.RIGHT_HIP].x, lm[PoseLandmark.RIGHT_HIP].y),
-                (lm[PoseLandmark.RIGHT_ANKLE].x, lm[PoseLandmark.RIGHT_ANKLE].y),
-            )
+            if "left_elbow" in enabled_angles:
+                angles["left_elbow"] = calculate_angle(
+                    (
+                        lm[PoseLandmark.LEFT_SHOULDER].x,
+                        lm[PoseLandmark.LEFT_SHOULDER].y,
+                    ),
+                    (lm[PoseLandmark.LEFT_ELBOW].x, lm[PoseLandmark.LEFT_ELBOW].y),
+                    (lm[PoseLandmark.LEFT_WRIST].x, lm[PoseLandmark.LEFT_WRIST].y),
+                )
+            if "right_elbow" in enabled_angles:
+                angles["right_elbow"] = calculate_angle(
+                    (
+                        lm[PoseLandmark.RIGHT_SHOULDER].x,
+                        lm[PoseLandmark.RIGHT_SHOULDER].y,
+                    ),
+                    (lm[PoseLandmark.RIGHT_ELBOW].x, lm[PoseLandmark.RIGHT_ELBOW].y),
+                    (lm[PoseLandmark.RIGHT_WRIST].x, lm[PoseLandmark.RIGHT_WRIST].y),
+                )
+            if "left_body" in enabled_angles:
+                angles["left_body"] = calculate_angle(
+                    (
+                        lm[PoseLandmark.LEFT_SHOULDER].x,
+                        lm[PoseLandmark.LEFT_SHOULDER].y,
+                    ),
+                    (lm[PoseLandmark.LEFT_HIP].x, lm[PoseLandmark.LEFT_HIP].y),
+                    (lm[PoseLandmark.LEFT_ANKLE].x, lm[PoseLandmark.LEFT_ANKLE].y),
+                )
+            if "right_body" in enabled_angles:
+                angles["right_body"] = calculate_angle(
+                    (
+                        lm[PoseLandmark.RIGHT_SHOULDER].x,
+                        lm[PoseLandmark.RIGHT_SHOULDER].y,
+                    ),
+                    (lm[PoseLandmark.RIGHT_HIP].x, lm[PoseLandmark.RIGHT_HIP].y),
+                    (lm[PoseLandmark.RIGHT_ANKLE].x, lm[PoseLandmark.RIGHT_ANKLE].y),
+                )
 
-        return {k: round(v, 1) for k, v in angles.items()}
-
-    @staticmethod
-    def _get_average_confidence(landmarks: list[Point]) -> float:
-        """計算所有關鍵點的平均信心分數"""
-        if not landmarks:
-            return 0.0
-        return float(np.mean([lm.visibility for lm in landmarks]))
-
-    @staticmethod
-    def _is_fully_visible(landmarks: list[Point], min_conf: float = 0.5) -> bool:
-        """
-        檢查使用者是否全身入鏡
-
-        判斷核心關鍵點（肩、髖、膝、踝）的 visibility 是否皆達標
-        """
-        key_indices = [
-            PoseLandmark.LEFT_SHOULDER,
-            PoseLandmark.RIGHT_SHOULDER,
-            PoseLandmark.LEFT_HIP,
-            PoseLandmark.RIGHT_HIP,
-            PoseLandmark.LEFT_KNEE,
-            PoseLandmark.RIGHT_KNEE,
-            PoseLandmark.LEFT_ANKLE,
-            PoseLandmark.RIGHT_ANKLE,
-        ]
-        return all(landmarks[i].visibility >= min_conf for i in key_indices)
+        return {
+            name: round(value, 1) if value is not None else None
+            for name, value in angles.items()
+        }
 
     def reset(self):
         """重置狀態（開始新的一組訓練）"""
         self._fsm.reset()
         self._smoother.reset()
+        self.tracking_state = TrackingState.ACQUIRING
+        self._consecutive_valid_frames = 0
+        self._invalid_since = None
+        self._movement_interrupted = False
 
 
 @dataclass
@@ -575,7 +765,9 @@ class AnalysisResult:
 
     rep_count: int
     state: str
-    angles: dict[str, float]
-    errors: list[str]
+    angles: dict[str, float | None]
+    form_errors: list[str]
+    tracking_hints: list[str]
     confidence: float
     is_visible: bool
+    tracking_state: str

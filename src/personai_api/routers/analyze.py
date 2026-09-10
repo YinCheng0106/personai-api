@@ -11,7 +11,11 @@ from pydantic import ValidationError
 
 from personai_api.auth import CurrentUser, verify_token
 from personai_api.config import get_settings
-from personai_api.models.biomechanics_schema import FrameInput, FrameOutput
+from personai_api.models.biomechanics_schema import (
+    FrameInput,
+    FrameOutput,
+    PoseMissingInput,
+)
 from personai_api.services.biomechanics import BiomechanicsAnalyzer, Point
 from personai_api.services.inbody import estimate_calories_per_rep
 
@@ -73,6 +77,7 @@ async def analyze_ws(
     settings = get_settings()
     received_at: deque[float] = deque()
     last_rep_count = 0
+    last_frame_id: int | None = None
     total_calories = 0.0
 
     try:
@@ -108,16 +113,31 @@ async def analyze_ws(
 
             started = time.perf_counter()
             try:
-                frame_input = FrameInput.model_validate(data)
-            except ValidationError:
+                if data.get("kind", "landmarks") == "landmarks":
+                    frame_input: FrameInput | PoseMissingInput = (
+                        FrameInput.model_validate(data)
+                    )
+                elif data.get("kind") == "pose_missing":
+                    frame_input = PoseMissingInput.model_validate(data)
+                else:
+                    raise ValueError("Unsupported pose message kind")
+            except (ValidationError, ValueError):
                 await websocket.close(code=4400, reason="Invalid pose frame")
                 return
 
-            landmarks = [
-                Point(x=kp.x, y=kp.y, z=kp.z, visibility=kp.visibility)
-                for kp in frame_input.keypoints
-            ]
-            result = analyzer.analyze(landmarks, frame_input.timestamp)
+            if last_frame_id is not None and frame_input.frame_id <= last_frame_id:
+                await websocket.close(code=4400, reason="Frame ID must increase")
+                return
+            last_frame_id = frame_input.frame_id
+
+            if isinstance(frame_input, PoseMissingInput):
+                result = analyzer.pose_missing(frame_input.timestamp)
+            else:
+                landmarks = [
+                    Point(x=kp.x, y=kp.y, z=kp.z, visibility=kp.visibility)
+                    for kp in frame_input.keypoints
+                ]
+                result = analyzer.analyze(landmarks, frame_input.timestamp)
 
             if result.rep_count > last_rep_count:
                 new_reps = result.rep_count - last_rep_count
@@ -132,7 +152,10 @@ async def analyze_ws(
                 rep_count=result.rep_count,
                 state=result.state,
                 angles=result.angles,
-                errors=result.errors,
+                errors=result.form_errors,
+                form_errors=result.form_errors,
+                tracking_hints=result.tracking_hints,
+                tracking_state=result.tracking_state,
                 confidence=result.confidence,
                 is_visible=result.is_visible,
                 calories=round(total_calories, 2),

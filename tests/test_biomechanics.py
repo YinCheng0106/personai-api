@@ -23,6 +23,7 @@ def _landmarks() -> list[Point]:
 
 def test_angle_and_one_euro_filter() -> None:
     assert calculate_angle((1, 0), (0, 0), (0, 1)) == pytest.approx(90)
+    assert calculate_angle((0, 0), (0, 0), (0, 1)) is None
     filter_ = OneEuroFilter(freq=12)
     first = filter_(0, 0)
     second = filter_(1, 1 / 12)

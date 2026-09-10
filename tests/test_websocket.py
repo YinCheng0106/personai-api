@@ -99,3 +99,86 @@ def test_websocket_closes_when_frame_rate_is_exceeded(monkeypatch) -> None:
             raise AssertionError("rate limit should close the connection")
         except WebSocketDisconnect as exc:
             assert exc.code == 4429
+
+
+def test_websocket_rejects_duplicate_frame_id(monkeypatch) -> None:
+    monkeypatch.setattr(
+        analyze_module,
+        "verify_token",
+        lambda *_: CurrentUser(id="00000000-0000-4000-8000-000000000004"),
+    )
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(
+            "/ws/analyze/squat",
+            headers={"origin": "http://localhost:3000"},
+            subprotocols=["personai.v1", "valid-token"],
+        ) as websocket,
+    ):
+        websocket.send_json(_frame(7))
+        websocket.receive_json()
+        websocket.send_json(_frame(7))
+        try:
+            websocket.receive_json()
+            raise AssertionError("duplicate frame should close the connection")
+        except WebSocketDisconnect as exc:
+            assert exc.code == 4400
+
+
+def test_websocket_rejects_non_finite_keypoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        analyze_module,
+        "verify_token",
+        lambda *_: CurrentUser(id="00000000-0000-4000-8000-000000000005"),
+    )
+    frame = _frame(1)
+    frame["keypoints"][0]["x"] = float("nan")
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(
+            "/ws/analyze/squat",
+            headers={"origin": "http://localhost:3000"},
+            subprotocols=["personai.v1", "valid-token"],
+        ) as websocket,
+    ):
+        websocket.send_json(frame)
+        try:
+            websocket.receive_json()
+            raise AssertionError("non-finite keypoint should close the connection")
+        except WebSocketDisconnect as exc:
+            assert exc.code == 4400
+
+
+def test_websocket_accepts_pose_missing_and_preserves_state_integrity(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        analyze_module,
+        "verify_token",
+        lambda *_: CurrentUser(id="00000000-0000-4000-8000-000000000006"),
+    )
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(
+            "/ws/analyze/squat",
+            headers={"origin": "http://localhost:3000"},
+            subprotocols=["personai.v1", "valid-token"],
+        ) as websocket,
+    ):
+        for frame_id in range(1, 4):
+            frame = _frame(frame_id)
+            frame["timestamp"] = frame_id / 10
+            websocket.send_json(frame)
+            active = websocket.receive_json()
+
+        websocket.send_json({"kind": "pose_missing", "frame_id": 4, "timestamp": 0.4})
+        missing = websocket.receive_json()
+
+        assert active["tracking_state"] == "ACTIVE"
+        assert missing["tracking_state"] == "PAUSED"
+        assert missing["tracking_hints"] == ["POSE_NOT_FOUND"]
+        assert missing["form_errors"] == []
+        assert missing["errors"] == []
+        assert missing["rep_count"] == active["rep_count"]
+        assert missing["calories"] == active["calories"]
+        assert all(value is None for value in missing["angles"].values())
