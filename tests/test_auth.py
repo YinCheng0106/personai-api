@@ -6,6 +6,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from jwt import PyJWKClientConnectionError
 
 import personai_api.auth as auth_module
 from personai_api.auth import verify_token
@@ -14,6 +15,7 @@ from personai_api.main import app
 
 PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PUBLIC_KEY = PRIVATE_KEY.public_key()
+REAL_JWKS_CLIENT_FACTORY = auth_module._jwks_client
 SETTINGS = Settings(
     auth_issuer="https://personai.test",
     auth_audience="personai-api",
@@ -30,6 +32,18 @@ class FakeJwksClient:
 
     def get_signing_key_from_jwt(self, _: str):
         return SimpleNamespace(key=self.key)
+
+
+class FlakyJwksClient(FakeJwksClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def get_signing_key_from_jwt(self, token: str):
+        self.calls += 1
+        if self.calls == 1:
+            raise PyJWKClientConnectionError("temporary JWKS failure")
+        return super().get_signing_key_from_jwt(token)
 
 
 def _token(**overrides: object) -> str:
@@ -55,6 +69,41 @@ def test_valid_jwt_uses_subject_as_user_id() -> None:
     user = verify_token(_token(), SETTINGS)
     assert user.id == "00000000-0000-4000-8000-000000000001"
     assert user.email == "test@personai.test"
+
+
+def test_jwks_client_uses_server_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def client_factory(url: str, **kwargs: object) -> object:
+        calls.append((url, kwargs))
+        return object()
+
+    REAL_JWKS_CLIENT_FACTORY.cache_clear()
+    monkeypatch.setattr(auth_module, "PyJWKClient", client_factory)
+    REAL_JWKS_CLIENT_FACTORY(SETTINGS.auth_jwks_url)
+    REAL_JWKS_CLIENT_FACTORY.cache_clear()
+
+    assert calls == [
+        (
+            SETTINGS.auth_jwks_url,
+            {
+                "cache_keys": True,
+                "lifespan": 300,
+                "headers": {"User-Agent": "PersonAI-API/1.0"},
+                "timeout": 10,
+            },
+        )
+    ]
+
+
+def test_transient_jwks_failure_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FlakyJwksClient()
+    monkeypatch.setattr(auth_module, "_jwks_client", lambda _: client)
+
+    user = verify_token(_token(), SETTINGS)
+
+    assert user.id == "00000000-0000-4000-8000-000000000001"
+    assert client.calls == 2
 
 
 @pytest.mark.parametrize(
@@ -87,29 +136,22 @@ def test_forged_signature_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         verify_token(forged, SETTINGS)
 
 
-def test_jwks_connection_is_retried_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FailingJwksClient:
-        def get_signing_key_from_jwt(self, _: str):
-            raise jwt.PyJWKClientConnectionError("temporary tunnel failure")
-
-    clients = iter((FailingJwksClient(), FakeJwksClient()))
-    cache_cleared = False
-
-    def fake_jwks_client(_: str):
-        return next(clients)
-
-    def clear_cache() -> None:
-        nonlocal cache_cleared
-        cache_cleared = True
-
-    fake_jwks_client.cache_clear = clear_cache  # type: ignore[attr-defined]
-    monkeypatch.setattr(auth_module, "_jwks_client", fake_jwks_client)
-
-    assert verify_token(_token(), SETTINGS).id == "00000000-0000-4000-8000-000000000001"
-    assert cache_cleared is True
-
-
-def test_rest_endpoint_requires_bearer_token() -> None:
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("get", "/user/me", None),
+        ("get", "/wk/me", None),
+        ("get", "/wk/me/summary", None),
+        ("get", "/wk/me/daily", None),
+        ("get", "/inbody/me", None),
+        ("post", "/inbody/me", {}),
+        ("post", "/inbody/me/calories", {}),
+        ("post", "/wk/me/record", {}),
+    ],
+)
+def test_rest_endpoints_require_bearer_token(
+    method: str, path: str, body: dict | None
+) -> None:
     with TestClient(app) as client:
-        response = client.get("/wk/me")
+        response = client.request(method, path, json=body)
     assert response.status_code == 401

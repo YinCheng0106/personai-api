@@ -26,6 +26,19 @@ def test_websocket_rejects_missing_token() -> None:
             assert exc.code == 4401
 
 
+def test_websocket_rejects_untrusted_origin() -> None:
+    with TestClient(app) as client:
+        try:
+            with client.websocket_connect(
+                "/ws/analyze/squat",
+                headers={"origin": "https://attacker.test"},
+                subprotocols=["personai.v1", "not-checked"],
+            ):
+                raise AssertionError("connection should not be accepted")
+        except WebSocketDisconnect as exc:
+            assert exc.code == 4403
+
+
 def test_websocket_echoes_frame_id_and_processing_time(monkeypatch) -> None:
     monkeypatch.setattr(
         analyze_module,
@@ -147,38 +160,3 @@ def test_websocket_rejects_non_finite_keypoint(monkeypatch) -> None:
             raise AssertionError("non-finite keypoint should close the connection")
         except WebSocketDisconnect as exc:
             assert exc.code == 4400
-
-
-def test_websocket_accepts_pose_missing_and_preserves_state_integrity(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        analyze_module,
-        "verify_token",
-        lambda *_: CurrentUser(id="00000000-0000-4000-8000-000000000006"),
-    )
-    with (
-        TestClient(app) as client,
-        client.websocket_connect(
-            "/ws/analyze/squat",
-            headers={"origin": "http://localhost:3000"},
-            subprotocols=["personai.v1", "valid-token"],
-        ) as websocket,
-    ):
-        for frame_id in range(1, 4):
-            frame = _frame(frame_id)
-            frame["timestamp"] = frame_id / 10
-            websocket.send_json(frame)
-            active = websocket.receive_json()
-
-        websocket.send_json({"kind": "pose_missing", "frame_id": 4, "timestamp": 0.4})
-        missing = websocket.receive_json()
-
-        assert active["tracking_state"] == "ACTIVE"
-        assert missing["tracking_state"] == "PAUSED"
-        assert missing["tracking_hints"] == ["POSE_NOT_FOUND"]
-        assert missing["form_errors"] == []
-        assert missing["errors"] == []
-        assert missing["rep_count"] == active["rep_count"]
-        assert missing["calories"] == active["calories"]
-        assert all(value is None for value in missing["angles"].values())

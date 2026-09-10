@@ -32,6 +32,34 @@ def test_inbody_validation_and_empty_state(client: TestClient) -> None:
     assert client.get("/inbody/me").status_code == 404
     invalid = client.post("/inbody/me", json={**INBODY, "weight_kg": -1})
     assert invalid.status_code == 422
+    impossible = client.post(
+        "/inbody/me", json={**INBODY, "skeletal_muscle_mass_kg": 80}
+    )
+    assert impossible.status_code == 422
+
+
+def test_inbody_update_preserves_editable_fields_and_isolates_users(
+    client: TestClient, current_identity: dict[str, str]
+) -> None:
+    first_user = current_identity["id"]
+    created = client.post(
+        "/inbody/me",
+        json={**INBODY, "age": 31, "gender": "female", "total_body_water_kg": 40},
+    )
+    assert created.status_code == 201
+    assert created.json()["age"] == 31
+    assert created.json()["gender"] == "female"
+    assert created.json()["body_fat_mass_kg"] == 14
+    assert created.json()["total_body_water_kg"] == 40
+
+    current_identity["id"] = "00000000-0000-4000-8000-000000000002"
+    assert client.get("/inbody/me").status_code == 404
+    assert (
+        client.post("/inbody/me", json={**INBODY, "weight_kg": 60}).status_code == 201
+    )
+
+    current_identity["id"] = first_user
+    assert client.get("/inbody/me").json()["weight_kg"] == 70
 
 
 def test_workout_storage_summary_and_user_isolation(
@@ -67,3 +95,19 @@ def test_user_me_comes_from_verified_identity(client: TestClient) -> None:
 def test_legacy_user_id_routes_are_removed(client: TestClient) -> None:
     assert client.get("/wk/u001").status_code == 404
     assert client.get("/inbody/u001").status_code == 404
+
+
+def test_workout_rejects_unreasonable_values(client: TestClient) -> None:
+    response = client.post(
+        "/wk/me/record",
+        json={
+            "exercise_type": "squat",
+            "reps": 10_001,
+            "sets": 1,
+            "duration_sec": 60,
+            "calories_burned": 10,
+            "avg_intensity": "moderate",
+            "errors_count": 0,
+        },
+    )
+    assert response.status_code == 422

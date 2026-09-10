@@ -80,6 +80,10 @@ fastapi dev src/personai_api/main.py
 
 所有 `/me` 端點皆需 `Authorization: Bearer <jwt>`。使用者 ID 只讀取已驗證 JWT 的 `sub`，不接受前端自填 ID。
 
+### PK WebSocket
+
+`WS /ws/pk?room=1234&exercise_type=squat` 會建立或加入具身分驗證的雙人房。它沿用姿勢分析的 `["personai.v1", "<jwt>"]` subprotocol 與 Origin allowlist；伺服器會驗證準備狀態與單調遞增分數，並拒絕第三位玩家或運動模式不一致的連線，且不會把 JWT subprotocol 值回傳給前端。
+
 ### WebSocket API
 
 #### `WS /ws/analyze/{exercise_type}?weight_kg=70`
@@ -99,6 +103,7 @@ fastapi dev src/personai_api/main.py
 
 ```json
 {
+  "frame_id": 1,
   "keypoints": [
     { "x": 0.5, "y": 0.3, "z": 0.0, "visibility": 0.99 },
     { "x": 0.6, "y": 0.4, "z": 0.0, "visibility": 0.95 }
@@ -113,6 +118,8 @@ fastapi dev src/personai_api/main.py
 
 ```json
 {
+  "frame_id": 1,
+  "processing_ms": 4.2,
   "rep_count": 5,
   "state": "descending",
   "angles": {
