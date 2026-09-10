@@ -1,6 +1,7 @@
 """InBody profile persistence and calorie estimation API."""
 
 from datetime import UTC, datetime
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -30,7 +31,7 @@ def _profile_from_model(row: InBodyProfileModel) -> InBodyProfile:
         weight_kg=row.weight_kg,
         height_cm=row.height_cm,
         age=row.age,
-        gender=row.gender,
+        gender=cast(Literal["male", "female"], row.gender),
         body_fat_pct=row.body_fat_pct,
         skeletal_muscle_mass_kg=row.skeletal_muscle_mass_kg,
         body_fat_mass_kg=row.body_fat_mass_kg,
@@ -41,7 +42,15 @@ def _profile_from_model(row: InBodyProfileModel) -> InBodyProfile:
 
 def _summary(row: InBodyProfileModel) -> InBodySummary:
     values = InBodyService(_profile_from_model(row)).get_profile_summary()
-    return InBodySummary(**values, measured_at=row.measured_at)
+    return InBodySummary(
+        **values,
+        age=row.age,
+        gender=cast(Literal["male", "female"], row.gender),
+        body_fat_mass_kg=row.body_fat_mass_kg,
+        total_body_water_kg=row.total_body_water_kg,
+        visceral_fat_level=row.visceral_fat_level,
+        measured_at=row.measured_at,
+    )
 
 
 @router.post(

@@ -1,19 +1,24 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 # 前端送出的運動紀錄
 class WorkoutRecordInput(BaseModel):
-    exercise_type: str = Field(..., description="運動類型 (squat / pushup)")
-    reps: int = Field(..., ge=0, description="完成次數")
-    sets: int = Field(1, ge=1, description="組數")
-    duration_sec: float = Field(0.0, ge=0, description="運動時長 (秒)")
-    calories_burned: float = Field(0.0, ge=0, description="消耗卡路里 (kcal)")
-    avg_intensity: str = Field(
+    exercise_type: Literal["squat", "pushup"] = Field(
+        ..., description="運動類型 (squat / pushup)"
+    )
+    reps: int = Field(..., ge=0, le=10_000, description="完成次數")
+    sets: int = Field(1, ge=1, le=1_000, description="組數")
+    duration_sec: float = Field(0.0, ge=0, le=86_400, description="運動時長 (秒)")
+    calories_burned: float = Field(
+        0.0, ge=0, le=100_000, description="消耗卡路里 (kcal)"
+    )
+    avg_intensity: Literal["light", "moderate", "vigorous"] = Field(
         "moderate", description="平均強度 (light / moderate / vigorous)"
     )
-    errors_count: int = Field(0, ge=0, description="姿勢錯誤次數")
+    errors_count: int = Field(0, ge=0, le=10_000, description="姿勢錯誤次數")
 
 
 # 回傳的運動紀錄（含 user_id 與 timestamp）

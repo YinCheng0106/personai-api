@@ -81,6 +81,10 @@ The server starts at `http://localhost:8000` by default. Interactive API docs ar
 
 All `/me` endpoints require `Authorization: Bearer <jwt>`. The user ID comes only from the verified JWT `sub`; client-supplied IDs are ignored.
 
+### PK WebSocket
+
+`WS /ws/pk?room=1234&exercise_type=squat` creates or joins an authenticated two-player room. It uses the same `["personai.v1", "<jwt>"]` subprotocol contract and Origin allowlist as pose analysis. The server validates readiness and monotonic score messages, rejects a third player or a mismatched exercise, and never echoes the JWT subprotocol value.
+
 ### WebSocket API
 
 #### `WS /ws/analyze/{exercise_type}?weight_kg=70`
@@ -100,6 +104,7 @@ The client must request WebSocket subprotocols `["personai.v1", "<jwt>"]`. The s
 
 ```json
 {
+  "frame_id": 1,
   "keypoints": [
     { "x": 0.5, "y": 0.3, "z": 0.0, "visibility": 0.99 },
     { "x": 0.6, "y": 0.4, "z": 0.0, "visibility": 0.95 }
@@ -114,6 +119,8 @@ The client must request WebSocket subprotocols `["personai.v1", "<jwt>"]`. The s
 
 ```json
 {
+  "frame_id": 1,
+  "processing_ms": 4.2,
   "rep_count": 5,
   "state": "descending",
   "angles": {

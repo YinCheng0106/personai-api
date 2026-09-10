@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from personai_api.config import get_settings
-from personai_api.routers import analyze, inbody, server, user, workout
+from personai_api.routers import analyze, inbody, pk, server, user, workout
 
 settings = get_settings()
 app = FastAPI(title="PersonAI")
@@ -21,3 +21,4 @@ app.include_router(user.router)
 app.include_router(inbody.router)
 app.include_router(workout.router)
 app.include_router(analyze.router)
+app.include_router(pk.router)

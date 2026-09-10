@@ -31,7 +31,7 @@ def _protocol_token(websocket: WebSocket) -> str | None:
     return protocols[1]
 
 
-async def _authenticate(websocket: WebSocket) -> CurrentUser | None:
+async def authenticate_websocket(websocket: WebSocket) -> CurrentUser | None:
     settings = get_settings()
     origin = websocket.headers.get("origin")
     if origin not in settings.cors_origins:
@@ -55,7 +55,7 @@ async def analyze_ws(
     exercise_type: str,
     weight_kg: float = Query(default=70.0, gt=0, le=500),
 ) -> None:
-    current_user = await _authenticate(websocket)
+    current_user = await authenticate_websocket(websocket)
     if current_user is None:
         return
     if current_user.id in active_users:
@@ -74,6 +74,7 @@ async def analyze_ws(
     received_at: deque[float] = deque()
     last_rep_count = 0
     total_calories = 0.0
+    last_frame_id = -1
 
     try:
         while True:
@@ -112,6 +113,10 @@ async def analyze_ws(
             except ValidationError:
                 await websocket.close(code=4400, reason="Invalid pose frame")
                 return
+            if frame_input.frame_id <= last_frame_id:
+                await websocket.close(code=4400, reason="Frame ID must increase")
+                return
+            last_frame_id = frame_input.frame_id
 
             landmarks = [
                 Point(x=kp.x, y=kp.y, z=kp.z, visibility=kp.visibility)
