@@ -12,8 +12,8 @@ class WorkoutRecordInput(BaseModel):
     reps: int = Field(..., ge=0, le=10_000, description="完成次數")
     sets: int = Field(1, ge=1, le=1_000, description="組數")
     duration_sec: float = Field(0.0, ge=0, le=86_400, description="運動時長 (秒)")
-    calories_burned: float = Field(
-        0.0, ge=0, le=100_000, description="消耗卡路里 (kcal)"
+    calories_burned: float | None = Field(
+        None, ge=0, le=100_000, description="消耗卡路里 (kcal)；無法估算時為 null"
     )
     avg_intensity: Literal["light", "moderate", "vigorous"] = Field(
         "moderate", description="平均強度 (light / moderate / vigorous)"
@@ -29,7 +29,7 @@ class WorkoutRecordOutput(BaseModel):
     reps: int = Field(..., description="完成次數")
     sets: int = Field(..., description="組數")
     duration_sec: float = Field(..., description="運動時長 (秒)")
-    calories_burned: float = Field(..., description="消耗卡路里 (kcal)")
+    calories_burned: float | None = Field(None, description="消耗卡路里 (kcal)")
     avg_intensity: str = Field(..., description="平均強度")
     errors_count: int = Field(..., description="姿勢錯誤次數")
     form_score: int = Field(..., ge=0, le=100, description="姿勢分數")
@@ -41,18 +41,24 @@ class WorkoutSummaryItem(BaseModel):
     exercise_type: str = Field(..., description="運動類型")
     total_reps: int = Field(..., description="總次數")
     total_sets: int = Field(..., description="總組數")
-    total_calories: float = Field(..., description="總消耗卡路里 (kcal)")
+    total_calories: float | None = Field(
+        None, description="總消耗卡路里；覆蓋不完整時為 null"
+    )
     total_duration_min: float = Field(..., description="總運動時長 (分鐘)")
     avg_reps_per_set: float = Field(..., description="每組平均次數")
     error_rate: float = Field(..., description="錯誤率")
     session_count: int = Field(..., description="訓練場次")
+    calorie_session_count: int = Field(..., description="具有卡路里資料的場次")
     avg_form_score: float = Field(..., description="平均姿勢分數")
 
 
 # 每日統計摘要（供熱力圖使用）
 class DailySummaryItem(BaseModel):
     date: str = Field(..., description="日期 (YYYY-MM-DD)")
-    total_calories: float = Field(..., description="總消耗卡路里 (kcal)")
+    total_calories: float | None = Field(
+        None, description="總消耗卡路里；覆蓋不完整時為 null"
+    )
     total_duration_min: float = Field(..., description="總運動時長 (分鐘)")
     workout_count: int = Field(..., description="運動次數")
+    calorie_workout_count: int = Field(..., description="具有卡路里資料的運動次數")
     total_reps: int = Field(..., description="總次數")

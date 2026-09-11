@@ -77,7 +77,7 @@ class WorkoutRecord:
     reps: int
     sets: int = 1
     duration_sec: float = 0.0
-    calories_burned: float = 0.0
+    calories_burned: float | None = None
     avg_intensity: ExerciseIntensity = ExerciseIntensity.MODERATE
     errors_count: int = 0
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -289,6 +289,7 @@ def generate_workout_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
         "avg_reps_per_set",
         "error_rate",
         "session_count",
+        "calorie_session_count",
         "avg_form_score",
     ]
     if not records:
@@ -320,13 +321,18 @@ def generate_workout_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
             total_duration_sec=("duration_sec", "sum"),
             total_errors=("errors", "sum"),
             session_count=("reps", "count"),
+            calorie_session_count=("calories", "count"),
             avg_form_score=("form_score", "mean"),
         )
         .reset_index()
     )
 
     summary["total_duration_min"] = (summary["total_duration_sec"] / 60.0).round(1)
-    summary["total_calories"] = summary["total_calories"].round(1)
+    complete_calorie_coverage = (
+        summary["calorie_session_count"] == summary["session_count"]
+    )
+    summary["total_calories"] = summary["total_calories"].round(1).astype(object)
+    summary.loc[~complete_calorie_coverage, "total_calories"] = None
     summary["avg_reps_per_set"] = np.where(
         summary["total_sets"] > 0,
         (summary["total_reps"] / summary["total_sets"]).round(1),
@@ -354,6 +360,7 @@ def generate_daily_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
                 "total_calories",
                 "total_duration_min",
                 "workout_count",
+                "calorie_workout_count",
                 "total_reps",
             ]
         )
@@ -375,14 +382,17 @@ def generate_daily_summary(records: list[WorkoutRecord]) -> pd.DataFrame:
         .agg(
             total_calories=("calories", "sum"),
             total_duration_sec=("duration_sec", "sum"),
-            workout_count=("calories", "count"),
+            workout_count=("reps", "count"),
+            calorie_workout_count=("calories", "count"),
             total_reps=("reps", "sum"),
         )
         .reset_index()
     )
 
     daily["total_duration_min"] = (daily["total_duration_sec"] / 60.0).round(1)
-    daily["total_calories"] = daily["total_calories"].round(1)
+    complete_calorie_coverage = daily["calorie_workout_count"] == daily["workout_count"]
+    daily["total_calories"] = daily["total_calories"].round(1).astype(object)
+    daily.loc[~complete_calorie_coverage, "total_calories"] = None
     return daily.drop(columns=["total_duration_sec"])
 
 

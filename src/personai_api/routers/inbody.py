@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 
 from personai_api.auth import CurrentUser, get_current_user
 from personai_api.database import get_db
-from personai_api.db_models import InBodyProfileModel
+from personai_api.db_models import (
+    BodyMeasurementModel,
+    BodyProfileModel,
+    InBodyProfileModel,
+)
 from personai_api.models.inbody_schema import (
     CalorieRequest,
     CalorieResponse,
@@ -66,13 +70,50 @@ def save_inbody(
 ):
     row = db.get(InBodyProfileModel, current_user.id)
     values = data.model_dump()
+    measured_at = datetime.now(UTC)
     if row is None:
-        row = InBodyProfileModel(user_id=current_user.id, **values)
+        row = InBodyProfileModel(
+            user_id=current_user.id, measured_at=measured_at, **values
+        )
         db.add(row)
     else:
         for key, value in values.items():
             setattr(row, key, value)
-        row.measured_at = datetime.now(UTC)
+        row.measured_at = measured_at
+
+    # This legacy adapter intentionally keeps current Basic Profile values in
+    # sync for existing clients. Generic measurement creation does not do this.
+    profile = db.get(BodyProfileModel, current_user.id)
+    if profile is None:
+        db.add(
+            BodyProfileModel(
+                user_id=current_user.id,
+                height_cm=data.height_cm,
+                weight_kg=data.weight_kg,
+            )
+        )
+    else:
+        profile.height_cm = data.height_cm
+        profile.weight_kg = data.weight_kg
+
+    # Compatibility writes also become real measurement history.
+    db.add(
+        BodyMeasurementModel(
+            user_id=current_user.id,
+            source="inbody",
+            source_label="InBody compatibility endpoint",
+            measured_at=measured_at,
+            height_cm=data.height_cm,
+            weight_kg=data.weight_kg,
+            body_fat_pct=data.body_fat_pct,
+            skeletal_muscle_mass_kg=data.skeletal_muscle_mass_kg,
+            body_fat_mass_kg=data.body_fat_mass_kg,
+            total_body_water_kg=data.total_body_water_kg,
+            visceral_fat_level=data.visceral_fat_level,
+            legacy_age=data.age,
+            legacy_gender=data.gender,
+        )
+    )
     db.commit()
     db.refresh(row)
     return _summary(row)

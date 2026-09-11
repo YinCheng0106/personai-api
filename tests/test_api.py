@@ -15,10 +15,21 @@ def test_inbody_create_update_and_calories(client: TestClient) -> None:
     created = client.post("/inbody/me", json=INBODY)
     assert created.status_code == 201
     assert created.json()["bmi"] == 22.86
+    assert client.get("/inbody/me").json()["weight_kg"] == 70
+    created_profile = client.get("/body-profile/me").json()
+    assert created_profile["height_cm"] == 175
+    assert created_profile["weight_kg"] == 70
 
     updated = client.post("/inbody/me", json={**INBODY, "weight_kg": 72})
     assert updated.status_code == 201
     assert client.get("/inbody/me").json()["weight_kg"] == 72
+    history = client.get("/body-profile/me/measurements").json()
+    assert len(history) == 2
+    assert history[0]["source"] == "inbody"
+    preferred = client.get("/body-profile/me").json()
+    assert preferred["state"] == "measured"
+    assert preferred["height_cm"] == 175
+    assert preferred["weight_kg"] == 72
 
     calories = client.post(
         "/inbody/me/calories",
@@ -111,3 +122,42 @@ def test_workout_rejects_unreasonable_values(client: TestClient) -> None:
         },
     )
     assert response.status_code == 422
+
+
+def test_nullable_workout_calories_and_aggregate_coverage(client: TestClient) -> None:
+    base = {
+        "exercise_type": "squat",
+        "reps": 10,
+        "sets": 1,
+        "duration_sec": 60,
+        "avg_intensity": "moderate",
+        "errors_count": 0,
+    }
+    known = client.post("/wk/me/record", json={**base, "calories_burned": 12.5})
+    unknown = client.post("/wk/me/record", json=base)
+    assert known.status_code == 201
+    assert unknown.status_code == 201
+    assert unknown.json()["calories_burned"] is None
+
+    summary = client.get("/wk/me/summary").json()[0]
+    assert summary["session_count"] == 2
+    assert summary["calorie_session_count"] == 1
+    assert summary["total_calories"] is None
+
+    daily = client.get("/wk/me/daily").json()[0]
+    assert daily["workout_count"] == 2
+    assert daily["calorie_workout_count"] == 1
+    assert daily["total_calories"] is None
+
+    historical_zero = client.post(
+        "/wk/me/record",
+        json={**base, "exercise_type": "pushup", "calories_burned": 0},
+    )
+    assert historical_zero.json()["calories_burned"] == 0
+    pushup_summary = next(
+        item
+        for item in client.get("/wk/me/summary").json()
+        if item["exercise_type"] == "pushup"
+    )
+    assert pushup_summary["total_calories"] == 0
+    assert pushup_summary["calorie_session_count"] == 1
