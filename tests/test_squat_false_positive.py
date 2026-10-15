@@ -326,3 +326,151 @@ def test_lost_requires_new_standing_baseline_before_next_valid_squat() -> None:
 
     assert analyzer._fsm.state == SquatState.IDLE
     assert analyzer._fsm.rep_count == 1
+
+
+def test_shallow_squat_reversal_reports_insufficient_depth() -> None:
+    """Returning upright without reaching BOTTOM must abandon the cycle."""
+    from personai_api.services.pose_visibility import FormErrorCode
+
+    fsm = SquatFSM()
+    _feed_fsm(fsm, ((170.0, 0.25, 3),))
+    assert fsm._armed is True
+
+    state, reps, _ = fsm.update(_squat_frame(145.0, hip_y=0.32))
+    assert state == SquatState.DESCENDING
+    assert reps == 0
+
+    state, reps, errors = fsm.update(_squat_frame(170.0, hip_y=0.25))
+    assert state == SquatState.IDLE
+    assert reps == 0
+    assert errors == [FormErrorCode.SQUAT_DEPTH_INSUFFICIENT.value]
+    assert fsm._max_hip_descent_ratio == 0.0
+    assert fsm._armed is True
+
+    # An incomplete rep must not prevent the next valid cycle from counting.
+    _feed_fsm(
+        fsm,
+        (
+            (145.0, 0.32, 1),
+            (85.0, 0.43, 1),
+            (120.0, 0.35, 1),
+            (170.0, 0.25, 1),
+        ),
+    )
+    assert fsm.rep_count == 1
+
+
+def test_partial_ascent_does_not_complete_a_rep_early() -> None:
+    """Remaining below standing knee angle during ASCENDING must not count."""
+    fsm = SquatFSM()
+    _feed_fsm(
+        fsm,
+        (
+            (170.0, 0.25, 3),
+            (145.0, 0.32, 1),
+            (85.0, 0.43, 1),
+            (120.0, 0.35, 1),
+            (130.0, 0.33, 1),
+            (150.0, 0.28, 1),
+        ),
+    )
+
+    assert fsm.state == SquatState.ASCENDING
+    assert fsm.rep_count == 0
+    assert fsm._max_hip_descent_ratio >= fsm.config.min_hip_descent_ratio
+
+    fsm.update(_squat_frame(170.0, hip_y=0.25))
+    assert fsm.state == SquatState.IDLE
+    assert fsm.rep_count == 1
+
+
+@pytest.mark.parametrize(
+    "bad_knee",
+    [PoseLandmark.LEFT_KNEE, PoseLandmark.RIGHT_KNEE],
+)
+def test_degenerate_knee_angle_is_ignored_without_arming(
+    bad_knee: PoseLandmark,
+) -> None:
+    """A zero-length joint vector is not evidence of standing or motion."""
+    fsm = SquatFSM()
+    landmarks = _squat_frame(170.0)
+    corresponding_hip = (
+        PoseLandmark.LEFT_HIP
+        if bad_knee == PoseLandmark.LEFT_KNEE
+        else PoseLandmark.RIGHT_HIP
+    )
+    landmarks[bad_knee] = landmarks[corresponding_hip]
+
+    for _ in range(5):
+        state, reps, errors = fsm.update(landmarks)
+        assert state == SquatState.IDLE
+        assert reps == 0
+        assert errors == []
+
+    assert fsm._armed is False
+    assert fsm._standing_hip_y is None
+
+
+def test_standing_arming_requires_consecutive_valid_frames() -> None:
+    """A single non-standing frame resets the standing confirmation streak."""
+    fsm = SquatFSM()
+    _feed_fsm(fsm, ((170.0, 0.25, 2),))
+    assert fsm._armed is False
+
+    fsm.update(_squat_frame(145.0, hip_y=0.25))
+    assert fsm._standing_candidate_frames == 0
+
+    _feed_fsm(fsm, ((170.0, 0.25, 2),))
+    assert fsm._armed is False
+
+    fsm.update(_squat_frame(170.0, hip_y=0.25))
+    assert fsm._armed is True
+
+
+def test_standing_arming_requires_sufficient_body_scale() -> None:
+    """Do not initialize a baseline with a too-small projected leg length."""
+    fsm = SquatFSM(SquatConfig(minimum_leg_scale=0.61))
+    _feed_fsm(fsm, ((170.0, 0.25, 5),))
+
+    assert fsm._armed is False
+    assert fsm._standing_leg_scale is None
+    assert fsm.rep_count == 0
+
+    allowed = SquatFSM(SquatConfig(minimum_leg_scale=0.59))
+    _feed_fsm(allowed, ((170.0, 0.25, 3),))
+    assert allowed._armed is True
+    assert allowed._standing_leg_scale == pytest.approx(0.6)
+
+
+def test_abandoned_cycle_cannot_reuse_missing_baseline() -> None:
+    """Defensive displacement helpers must reject a cleared standing baseline."""
+    fsm = SquatFSM()
+    _feed_fsm(fsm, ((170.0, 0.25, 3),))
+    assert fsm._armed is True
+
+    fsm.abandon_cycle()
+    fsm._record_hip_descent(0.45)
+    assert fsm._max_hip_descent_ratio == 0.0
+    assert fsm._returned_to_standing(0.25) is False
+    assert fsm._standing_hip_y is None
+    assert fsm._standing_leg_scale is None
+    assert fsm.rep_count == 0
+
+
+def test_nonfinite_descent_cannot_poison_cycle_peak() -> None:
+    """A non-finite displacement must not overwrite valid cycle evidence."""
+    fsm = SquatFSM()
+    _feed_fsm(fsm, ((170.0, 0.25, 3),))
+    fsm._record_hip_descent(float("nan"))
+    assert fsm._max_hip_descent_ratio == 0.0
+
+    _feed_fsm(
+        fsm,
+        (
+            (145.0, 0.32, 1),
+            (85.0, 0.43, 1),
+            (120.0, 0.35, 1),
+            (170.0, 0.25, 1),
+        ),
+    )
+    assert fsm.rep_count == 1
