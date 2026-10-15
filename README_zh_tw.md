@@ -196,6 +196,9 @@ src/personai_api/
 
 ## 開發指令
 
+開發與審查流程見 [CONTRIBUTING.md](CONTRIBUTING.md)；本機 PostgreSQL、涵蓋率與
+Codecov 設定見 [docs/TESTING.md](docs/TESTING.md)。
+
 ```bash
 # 型別檢查
 hatch run types:check

@@ -4,9 +4,15 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   quality:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC; no repository write permission or upload secret
     services:
       postgres:
         image: postgres:17-alpine
@@ -23,10 +29,11 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://personai:personai_test_only@127.0.0.1:5432/personai_test
+      PERSONAI_TEST_POSTGRES_URL: postgresql://personai:personai_test_only@127.0.0.1:5432/personai_test
       AUTH_ISSUER: http://127.0.0.1:3000
       AUTH_AUDIENCE: personai-api
       AUTH_JWKS_URL: http://127.0.0.1:3000/api/auth/jwks
-      CORS_ORIGINS: http://127.0.0.1:3000
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,5 +43,30 @@ jobs:
       - run: pip install hatch
       - run: hatch run lint
       - run: hatch run types:check
-      - run: hatch run test-cov
+      - name: Tests and coverage
+        id: tests
+        run: hatch run test-cov --junitxml=test-results/junit.xml -o junit_family=legacy
       - run: hatch run alembic upgrade head
+      - run: hatch run alembic check
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' && hashFiles('coverage.xml') != '' }}
+        continue-on-error: true
+        uses: codecov/codecov-action@v6
+        with:
+          use_oidc: true
+          files: ./coverage.xml
+          disable_search: true
+          plugins: noop
+          report_type: coverage
+          fail_ci_if_error: false
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' && hashFiles('test-results/junit.xml') != '' }}
+        continue-on-error: true
+        uses: codecov/codecov-action@v6
+        with:
+          use_oidc: true
+          files: ./test-results/junit.xml
+          disable_search: true
+          plugins: noop
+          report_type: test_results
+          fail_ci_if_error: false
