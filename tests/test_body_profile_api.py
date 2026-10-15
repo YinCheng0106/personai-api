@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -177,3 +178,78 @@ def test_measurement_ownership_isolation(
     assert [
         item["id"] for item in client.get("/body-profile/me/measurements").json()
     ] == [first["id"]]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"source": None},
+        {"measured_at": None},
+        {"source": "   "},
+        {"weight_kg": 20},
+        {"body_fat_pct": None, "skeletal_muscle_mass_kg": None},
+    ],
+)
+def test_invalid_correction_preserves_entire_stored_measurement(
+    client: TestClient,
+    changes: dict[str, object],
+) -> None:
+    saved = client.post(
+        "/body-profile/me/measurements", json=_measurement(skeletal_muscle_mass_kg=30)
+    ).json()
+    path = f"/body-profile/me/measurements/{saved['id']}"
+    response = client.patch(path, json={"source_label": "must not persist", **changes})
+    assert response.status_code == 422
+    assert client.get(path).json() == saved
+
+
+def test_measured_history_does_not_supply_fake_current_body_defaults(
+    client: TestClient,
+    current_identity: dict[str, str],
+) -> None:
+    owner = current_identity["id"]
+    saved = client.post("/body-profile/me/measurements", json=_measurement()).json()
+    assert client.get("/body-profile/me").json() == {
+        "state": "measured",
+        "height_cm": None,
+        "weight_kg": None,
+        "bmi": None,
+        "updated_at": None,
+    }
+    client.patch("/body-profile/me", json={"weight_kg": 65})
+    current_identity["id"] = "other-user"
+    assert client.get("/body-profile/me").json()["state"] == "unknown"
+    client.patch("/body-profile/me", json={"weight_kg": 90})
+    current_identity["id"] = owner
+    assert client.get("/body-profile/me").json()["weight_kg"] == 65
+    cleared = client.patch("/body-profile/me", json={"weight_kg": None}).json()
+    assert cleared["state"] == "measured"
+    assert cleared["weight_kg"] is None
+    assert client.get(f"/body-profile/me/measurements/{saved['id']}").json() == saved
+
+
+def test_corrected_measurement_reorders_history_and_clears_derived_values(
+    client: TestClient,
+) -> None:
+    older = client.post("/body-profile/me/measurements", json=_measurement()).json()
+    newer = client.post(
+        "/body-profile/me/measurements",
+        json=_measurement(measured_at="2026-10-01T00:00:00Z"),
+    ).json()
+    changed = client.patch(
+        f"/body-profile/me/measurements/{older['id']}",
+        json={
+            "measured_at": "2026-11-01T00:00:00Z",
+            "weight_kg": None,
+        },
+    ).json()
+    assert changed["bmi"] is None
+    assert changed["lean_body_mass_kg"] is None
+    assert changed["bmr_kcal_day"] is None
+    assert changed["bmr_is_formula_estimate"] is False
+    assert [
+        row["id"] for row in client.get("/body-profile/me/measurements").json()
+    ] == [
+        older["id"],
+        newer["id"],
+    ]

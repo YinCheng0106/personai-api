@@ -1,0 +1,45 @@
+name: Bug report
+description: 回報可重現的後端錯誤
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: 請使用合成資料。不要貼上 JWT、連線字串、機密、可辨識使用者的紀錄或未經同意的影像。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 問題與影響
+      description: 哪個 API、WebSocket、動作分析或資料流程受到影響？
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 重現步驟
+      description: 提供最小請求、合成 frame 或操作順序。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 預期行為
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 實際行為與已遮罩的錯誤紀錄
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 環境
+      description: commit、Python、作業系統、SQLite／PostgreSQL 版本；Pose 問題另附鏡頭角度與可見部位。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 測試證據與發生頻率
+      description: 區分自動測試、真人觀察與推測；若涉及資料遺失、跨使用者存取或 migration，請說明影響範圍。

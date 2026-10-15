@@ -335,3 +335,34 @@ def test_filter_replay_matches_sequence_where_invalid_frame_never_existed() -> N
     reference.analyze(next_frame, 0.7)
 
     assert _filter_snapshot(guarded) == _filter_snapshot(reference)
+
+
+@pytest.mark.parametrize("exercise", ["squat", "pushup"])
+def test_interrupted_acquisition_restarts_valid_frame_streak(exercise: str) -> None:
+    analyzer = BiomechanicsAnalyzer(exercise)
+    valid = _landmarks(exercise)
+    analyzer.analyze(valid, 0.0)
+    analyzer.analyze(valid, 0.1)
+    analyzer.pose_missing(0.15)
+    for timestamp, state in [
+        (0.2, TrackingState.ACQUIRING),
+        (0.3, TrackingState.ACQUIRING),
+        (0.4, TrackingState.ACTIVE),
+    ]:
+        result = analyzer.analyze(valid, timestamp)
+        assert result.tracking_state == state
+        assert result.rep_count == 0
+
+
+@pytest.mark.parametrize("exercise", ["squat", "pushup"])
+def test_reset_after_lost_matches_fresh_analyzer(exercise: str) -> None:
+    analyzer = BiomechanicsAnalyzer(exercise)
+    valid = _landmarks(exercise)
+    _acquire(analyzer, valid)
+    analyzer.pose_missing(0.3)
+    assert analyzer.pose_missing(1.4).tracking_state == TrackingState.LOST
+    analyzer.reset()
+    reference = BiomechanicsAnalyzer(exercise)
+    for timestamp in [2.0, 2.1, 2.2, 2.3]:
+        assert analyzer.analyze(valid, timestamp) == reference.analyze(valid, timestamp)
+    assert _filter_snapshot(analyzer) == _filter_snapshot(reference)
