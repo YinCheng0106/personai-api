@@ -228,6 +228,9 @@ class SquatConfig:
     - knee_standing_angle: 判定站立的膝蓋角度下限
     - knee_valgus_ratio  : 膝距/臀距 < 此值 → 膝蓋內扣
     - hysteresis         : 遲滯區間（防止狀態抖動）
+
+    The standing/displacement guard values are provisional pilot-calibrated
+    starting points. They require real-person validation before production tuning.
     """
 
     knee_bottom_angle: float = 100.0
@@ -235,6 +238,10 @@ class SquatConfig:
     knee_valgus_ratio: float = 0.8
     torso_lean_max: float = 45.0
     hysteresis: float = 5.0
+    min_hip_descent_ratio: float = 0.18
+    standing_return_tolerance: float = 0.06
+    standing_confirmation_frames: int = 3
+    minimum_leg_scale: float = 1e-6
 
 
 class SquatFSM:
@@ -244,6 +251,11 @@ class SquatFSM:
         self.rep_count = 0
         self._reached_bottom = False
         self._errors: list[str] = []
+        self._armed = False
+        self._standing_candidate_frames = 0
+        self._standing_hip_y: float | None = None
+        self._standing_leg_scale: float | None = None
+        self._max_hip_descent_ratio = 0.0
 
     def update(
         self,
@@ -275,6 +287,11 @@ class SquatFSM:
         if left_knee_angle is None or right_knee_angle is None:
             return self.state, self.rep_count, self._errors
         knee_angle = (left_knee_angle + right_knee_angle) / 2
+        hip_y = (l_hip.y + r_hip.y) / 2
+        leg_scale = (
+            float(np.hypot(l_hip.x - l_ankle.x, l_hip.y - l_ankle.y))
+            + float(np.hypot(r_hip.x - r_ankle.x, r_hip.y - r_ankle.y))
+        ) / 2
 
         # --- 3. 錯誤偵測 ---
         # 膝蓋內扣：膝蓋間距 vs 髖部間距
@@ -294,10 +311,41 @@ class SquatFSM:
                 self._errors.append(FormErrorCode.SQUAT_TORSO_LEAN.value)
 
         # --- 4. FSM 狀態轉換 ---
+        if self.state != SquatState.IDLE:
+            self._record_hip_descent(hip_y)
+
         if self.state == SquatState.IDLE:
-            if knee_angle < cfg.knee_standing_angle - cfg.hysteresis:
+            is_standing_candidate = (
+                left_knee_angle >= cfg.knee_standing_angle
+                and right_knee_angle >= cfg.knee_standing_angle
+                and l_hip.y < l_knee.y < l_ankle.y
+                and r_hip.y < r_knee.y < r_ankle.y
+                and np.isfinite(leg_scale)
+                and leg_scale > cfg.minimum_leg_scale
+            )
+            if is_standing_candidate:
+                self._standing_candidate_frames = min(
+                    self._standing_candidate_frames + 1,
+                    cfg.standing_confirmation_frames,
+                )
+                if self._standing_candidate_frames >= cfg.standing_confirmation_frames:
+                    self._armed = True
+                    self._standing_hip_y = hip_y
+                    self._standing_leg_scale = leg_scale
+            else:
+                self._standing_candidate_frames = 0
+
+            if (
+                self._armed
+                and self._standing_hip_y is not None
+                and self._standing_leg_scale is not None
+                and knee_angle < cfg.knee_standing_angle - cfg.hysteresis
+            ):
                 self.state = SquatState.DESCENDING
                 self._reached_bottom = False
+                self._standing_candidate_frames = 0
+                self._max_hip_descent_ratio = 0.0
+                self._record_hip_descent(hip_y)
 
         elif self.state == SquatState.DESCENDING:
             if knee_angle <= cfg.knee_bottom_angle:
@@ -306,7 +354,7 @@ class SquatFSM:
             elif knee_angle > cfg.knee_standing_angle:
                 if FormErrorCode.SQUAT_DEPTH_INSUFFICIENT in rules:
                     self._errors.append(FormErrorCode.SQUAT_DEPTH_INSUFFICIENT.value)
-                self.state = SquatState.IDLE
+                self._finish_cycle()
 
         elif self.state == SquatState.BOTTOM:
             if knee_angle > cfg.knee_bottom_angle + cfg.hysteresis:
@@ -314,16 +362,46 @@ class SquatFSM:
 
         elif self.state == SquatState.ASCENDING:
             if knee_angle >= cfg.knee_standing_angle:
-                if self._reached_bottom:
+                returned_to_standing = self._returned_to_standing(hip_y)
+                if (
+                    self._reached_bottom
+                    and self._max_hip_descent_ratio >= cfg.min_hip_descent_ratio
+                    and returned_to_standing
+                ):
                     self.rep_count += 1
-                self.state = SquatState.IDLE
+                self._finish_cycle()
 
         return self.state, self.rep_count, self._errors
 
-    def abandon_cycle(self) -> None:
+    def _record_hip_descent(self, hip_y: float) -> None:
+        if self._standing_hip_y is None or self._standing_leg_scale is None:
+            return
+        descent_ratio = (hip_y - self._standing_hip_y) / self._standing_leg_scale
+        if np.isfinite(descent_ratio):
+            self._max_hip_descent_ratio = max(
+                self._max_hip_descent_ratio, descent_ratio
+            )
+
+    def _returned_to_standing(self, hip_y: float) -> bool:
+        if self._standing_hip_y is None or self._standing_leg_scale is None:
+            return False
+        return (
+            abs(hip_y - self._standing_hip_y) / self._standing_leg_scale
+            <= self.config.standing_return_tolerance
+        )
+
+    def _finish_cycle(self) -> None:
         self.state = SquatState.IDLE
         self._reached_bottom = False
+        self._standing_candidate_frames = 0
+        self._max_hip_descent_ratio = 0.0
+
+    def abandon_cycle(self) -> None:
+        self._finish_cycle()
         self._errors = []
+        self._armed = False
+        self._standing_hip_y = None
+        self._standing_leg_scale = None
 
     def reset(self) -> None:
         self.abandon_cycle()

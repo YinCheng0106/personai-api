@@ -12,12 +12,14 @@ from personai_api.services.biomechanics import (
 )
 
 
-def _landmarks() -> list[Point]:
+def _landmarks(hip_y: float = 0.4) -> list[Point]:
     points = [Point(0.5, 0.5, visibility=1.0) for _ in range(33)]
-    points[23] = Point(0.4, 0.4, visibility=1.0)
-    points[24] = Point(0.6, 0.4, visibility=1.0)
+    points[23] = Point(0.4, hip_y, visibility=1.0)
+    points[24] = Point(0.6, hip_y, visibility=1.0)
     points[25] = Point(0.35, 0.6, visibility=1.0)
     points[26] = Point(0.65, 0.6, visibility=1.0)
+    points[27] = Point(0.4, 0.9, visibility=1.0)
+    points[28] = Point(0.6, 0.9, visibility=1.0)
     return points
 
 
@@ -37,12 +39,14 @@ def test_squat_fsm_counts_a_complete_synthetic_rep(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     values: Iterator[float] = iter(
-        value for knee in (170, 150, 90, 110, 165) for value in (knee, knee, 0)
+        value
+        for knee in (170, 170, 170, 150, 90, 110, 165)
+        for value in (knee, knee, 0)
     )
     monkeypatch.setattr(biomechanics, "calculate_angle", lambda *_: next(values))
     fsm = SquatFSM()
-    for _ in range(5):
-        fsm.update(_landmarks())
+    for hip_y in (0.4, 0.4, 0.4, 0.45, 0.52, 0.48, 0.4):
+        fsm.update(_landmarks(hip_y))
     assert fsm.rep_count == 1
 
 
