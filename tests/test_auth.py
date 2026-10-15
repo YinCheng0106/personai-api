@@ -146,6 +146,10 @@ def test_forged_signature_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         ("get", "/inbody/me", None),
         ("post", "/inbody/me", {}),
         ("post", "/inbody/me/calories", {}),
+        ("get", "/body-profile/me", None),
+        ("patch", "/body-profile/me", {}),
+        ("get", "/body-profile/me/measurements", None),
+        ("post", "/body-profile/me/measurements", {}),
         ("post", "/wk/me/record", {}),
     ],
 )

@@ -3,21 +3,31 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections import deque
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from personai_api.auth import CurrentUser, verify_token
 from personai_api.config import get_settings
-from personai_api.models.biomechanics_schema import FrameInput, FrameOutput
+from personai_api.database import get_db
+from personai_api.db_models import BodyProfileModel
+from personai_api.models.biomechanics_schema import (
+    FrameInput,
+    FrameOutput,
+    PoseMissingInput,
+)
 from personai_api.services.biomechanics import BiomechanicsAnalyzer, Point
 from personai_api.services.inbody import estimate_calories_per_rep
 
 router = APIRouter(tags=["生物力學分析"])
 PROTOCOL = "personai.v1"
 active_users: set[str] = set()
+logger = logging.getLogger(__name__)
 
 
 def _protocol_token(websocket: WebSocket) -> str | None:
@@ -37,7 +47,6 @@ async def authenticate_websocket(websocket: WebSocket) -> CurrentUser | None:
     if origin not in settings.cors_origins:
         await websocket.close(code=4403, reason="Origin not allowed")
         return None
-
     token = _protocol_token(websocket)
     if token is None:
         await websocket.close(code=4401, reason="Authentication required")
@@ -49,11 +58,25 @@ async def authenticate_websocket(websocket: WebSocket) -> CurrentUser | None:
         return None
 
 
+def _current_weight(db: Session, user_id: str) -> float | None:
+    """Treat missing or temporarily unavailable body data as unknown."""
+    try:
+        profile = db.get(BodyProfileModel, user_id)
+    except SQLAlchemyError:
+        try:
+            db.rollback()
+        except SQLAlchemyError:
+            pass
+        logger.warning("Body profile lookup failed; calorie estimation is unavailable")
+        return None
+    return profile.weight_kg if profile is not None else None
+
+
 @router.websocket("/ws/analyze/{exercise_type}")
 async def analyze_ws(
     websocket: WebSocket,
     exercise_type: str,
-    weight_kg: float = Query(default=70.0, gt=0, le=500),
+    db: Session = Depends(get_db),
 ) -> None:
     current_user = await authenticate_websocket(websocket)
     if current_user is None:
@@ -71,10 +94,11 @@ async def analyze_ws(
     active_users.add(current_user.id)
     await websocket.accept(subprotocol=PROTOCOL)
     settings = get_settings()
+    weight_kg = _current_weight(db, current_user.id)
     received_at: deque[float] = deque()
     last_rep_count = 0
-    total_calories = 0.0
     last_frame_id = -1
+    total_calories = 0.0 if weight_kg is not None else None
 
     try:
         while True:
@@ -103,14 +127,21 @@ async def analyze_ws(
             if data.get("action") == "reset":
                 analyzer.reset()
                 last_rep_count = 0
-                total_calories = 0.0
+                total_calories = 0.0 if weight_kg is not None else None
                 await websocket.send_json({"action": "reset", "status": "ok"})
                 continue
 
             started = time.perf_counter()
             try:
-                frame_input = FrameInput.model_validate(data)
-            except ValidationError:
+                if data.get("kind", "landmarks") == "landmarks":
+                    frame_input: FrameInput | PoseMissingInput = (
+                        FrameInput.model_validate(data)
+                    )
+                elif data.get("kind") == "pose_missing":
+                    frame_input = PoseMissingInput.model_validate(data)
+                else:
+                    raise ValueError("Unsupported pose message kind")
+            except (ValidationError, ValueError):
                 await websocket.close(code=4400, reason="Invalid pose frame")
                 return
             if frame_input.frame_id <= last_frame_id:
@@ -118,17 +149,21 @@ async def analyze_ws(
                 return
             last_frame_id = frame_input.frame_id
 
-            landmarks = [
-                Point(x=kp.x, y=kp.y, z=kp.z, visibility=kp.visibility)
-                for kp in frame_input.keypoints
-            ]
-            result = analyzer.analyze(landmarks, frame_input.timestamp)
+            if isinstance(frame_input, PoseMissingInput):
+                result = analyzer.pose_missing(frame_input.timestamp)
+            else:
+                landmarks = [
+                    Point(x=kp.x, y=kp.y, z=kp.z, visibility=kp.visibility)
+                    for kp in frame_input.keypoints
+                ]
+                result = analyzer.analyze(landmarks, frame_input.timestamp)
 
             if result.rep_count > last_rep_count:
                 new_reps = result.rep_count - last_rep_count
-                total_calories += (
-                    estimate_calories_per_rep(exercise_type, weight_kg) * new_reps
-                )
+                if weight_kg is not None and total_calories is not None:
+                    total_calories += (
+                        estimate_calories_per_rep(exercise_type, weight_kg) * new_reps
+                    )
                 last_rep_count = result.rep_count
 
             output = FrameOutput(
@@ -137,10 +172,15 @@ async def analyze_ws(
                 rep_count=result.rep_count,
                 state=result.state,
                 angles=result.angles,
-                errors=result.errors,
+                errors=result.form_errors,
+                form_errors=result.form_errors,
+                tracking_hints=result.tracking_hints,
+                tracking_state=result.tracking_state,
                 confidence=result.confidence,
                 is_visible=result.is_visible,
-                calories=round(total_calories, 2),
+                calories=round(total_calories, 2)
+                if total_calories is not None
+                else None,
             )
             await websocket.send_json(output.model_dump())
     except WebSocketDisconnect:
