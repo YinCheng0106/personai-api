@@ -1,0 +1,34 @@
+name: Feature request
+description: 提出具體問題與可驗收的後端改進
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用情境與問題
+      description: 誰在什麼情境遇到什麼限制？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建議方案
+      description: 說明預期行為與 API／WebSocket 契約。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 替代方案與取捨
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 驗收條件
+      description: 列出成功與失敗情境；若涉及 Pose，請分開列出自動測試與真人驗證。
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 相容性、資料與安全影響
+      description: 說明 migration、rollback、JWT／Origin、使用者隔離、nullable 生理資料與前端協作需求；不適用請填 N/A。

@@ -197,6 +197,9 @@ Calories (kcal) = METs × Weight (kg) × Duration (hr)
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development and review workflow,
+and [docs/TESTING.md](docs/TESTING.md) for local PostgreSQL, coverage and Codecov setup.
+
 ```bash
 # Type checking
 hatch run types:check

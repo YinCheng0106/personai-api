@@ -47,7 +47,7 @@ dependencies = [
 format = "ruff format {args:src tests}"
 lint = "ruff check {args:src tests}"
 test = "pytest {args:tests}"
-test-cov = "pytest --cov=personai_api --cov-report=term-missing --cov-fail-under=70 {args:tests}"
+test-cov = "pytest --cov=personai_api --cov-report=term-missing --cov-report=xml:coverage.xml --cov-fail-under=70 {args:tests}"
 benchmark-ws = "python scripts/ws_benchmark.py {args}"
 
 [project.urls]
@@ -90,6 +90,7 @@ entrypoint = "personai_api.main:app"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["postgres: opt-in integration tests against fixture-owned local PostgreSQL databases"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
