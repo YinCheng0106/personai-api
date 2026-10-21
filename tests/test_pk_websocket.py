@@ -218,3 +218,46 @@ def test_duplicate_user_rejection_and_disconnect_room_cleanup(
             assert state["opponent_score"] == 0
             assert pk_module.manager.rooms["2468"].phase == "waiting"
     assert pk_module.manager.rooms == {}
+
+
+def test_pk_scores_stay_in_their_room(
+    pk_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pk_module, "PREPARE_SECONDS", 0)
+
+    def connect(room: str, user: str):
+        return pk_client.websocket_connect(
+            f"/ws/pk?room={room}&exercise_type=squat",
+            headers={"origin": "http://localhost:3000"},
+            subprotocols=["personai.v1", user],
+        )
+
+    with connect("1111", "a1") as a1, connect("1111", "a2") as a2:
+        a1.receive_json()
+        a1.receive_json()
+        a2.receive_json()
+        a1.send_json({"type": "READY", "ready": True})
+        a1.receive_json()
+        a2.receive_json()
+        a2.send_json({"type": "READY", "ready": True})
+        for event in ("ROOM_STATE", "GAME_START", "GAME_BEGIN"):
+            assert a1.receive_json()["type"] == event
+            assert a2.receive_json()["type"] == event
+        with connect("2222", "b1") as b1, connect("2222", "b2") as b2:
+            b1.receive_json()
+            b1.receive_json()
+            b2.receive_json()
+            a1.send_json({"type": "SCORE_UPDATE", "score": 1})
+            assert a2.receive_json() == {"type": "OPPONENT_SCORE", "score": 1}
+            # A room-state response is a deterministic ordering barrier. Any
+            # leaked score would be queued ahead of it on the other room.
+            b1.send_json({"type": "READY", "ready": False})
+            assert b1.receive_json()["type"] == "ROOM_STATE"
+            assert b2.receive_json()["type"] == "ROOM_STATE"
+            assert pk_module.manager.rooms["2222"].players["b1"].score == 0
+            assert pk_module.manager.rooms["2222"].players["b2"].score == 0
+
+
+def test_legacy_password_reset_endpoints_are_not_registered(client: TestClient) -> None:
+    for endpoint in ("/auth/forgot-password", "/auth/reset-password"):
+        assert client.post(endpoint, json={}).status_code == 404
