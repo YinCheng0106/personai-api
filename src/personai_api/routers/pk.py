@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from collections import deque
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from personai_api.config import get_settings
 from personai_api.routers.analyze import PROTOCOL, authenticate_websocket
 
 router = APIRouter(tags=["1v1 PK 對戰"])
+logger = logging.getLogger(__name__)
 ROOM_PATTERN = re.compile(r"^[0-9]{4}$")
 EXERCISE_TYPES = {"squat", "pushup"}
 MAX_SCORE = 10_000
@@ -77,17 +79,18 @@ class PKRoomManager:
                 return False
             try:
                 await websocket.accept(subprotocol=PROTOCOL)
-            except Exception:
-                if not room.players:
+            except (Exception, asyncio.CancelledError):
+                if self.rooms.get(room_id) is room and not room.players:
                     self.rooms.pop(room_id, None)
                 raise
+            if self.rooms.get(room_id) is not room:
+                await websocket.close(code=4409, reason="Room no longer available")
+                return False
             room.players[user.id] = Player(websocket=websocket)
             await self._room_state(room_id, room)
             return user.id in room.players
 
-    def _remove(self, room_id: str, room: Room, user_id: str) -> None:
-        if room.players.pop(user_id, None) is None:
-            return
+    def _cancel_match(self, room: Room) -> None:
         task, room.timer_task = room.timer_task, None
         if task is not None and task is not asyncio.current_task():
             task.cancel()
@@ -103,6 +106,13 @@ class PKRoomManager:
             for player in room.players.values():
                 player.ready = False
                 player.score = 0
+
+    def _remove(self, room_id: str, room: Room, user_id: str) -> None:
+        if self.rooms.get(room_id) is not room:
+            return
+        if room.players.pop(user_id, None) is None:
+            return
+        self._cancel_match(room)
         if not room.players:
             self.rooms.pop(room_id, None)
 
@@ -116,6 +126,8 @@ class PKRoomManager:
         if room is None:
             return
         async with room.lock:
+            if self.rooms.get(room_id) is not room:
+                return
             player = room.players.get(user_id)
             # A delayed old connection must not remove a newly joined socket.
             if player is None or (
@@ -146,6 +158,8 @@ class PKRoomManager:
     ) -> None:
         stale = []
         for user_id, message in messages.items():
+            if self.rooms.get(room_id) is not room:
+                return
             player = room.players.get(user_id)
             if player is None:
                 continue
@@ -191,7 +205,8 @@ class PKRoomManager:
             return
         async with room.lock:
             if (
-                user_id not in room.players
+                self.rooms.get(room_id) is not room
+                or user_id not in room.players
                 or room.phase != "waiting"
                 or (
                     websocket is not None
@@ -201,8 +216,10 @@ class PKRoomManager:
                 return
             room.players[user_id].ready = ready
             await self._room_state(room_id, room)
-            if len(room.players) != 2 or not all(
-                p.ready for p in room.players.values()
+            if (
+                self.rooms.get(room_id) is not room
+                or len(room.players) != 2
+                or not all(p.ready for p in room.players.values())
             ):
                 return
             for player in room.players.values():
@@ -224,7 +241,10 @@ class PKRoomManager:
             await self._send(room_id, room, {uid: message for uid in room.players})
 
     async def _wait_until(self, deadline: float) -> None:
-        await asyncio.sleep(max(0, deadline - monotonic()))
+        # Event-loop sleeps can wake early; only the monotonic deadline advances
+        # the lifecycle, including after a spurious wakeup.
+        while (remaining := deadline - monotonic()) > 0:
+            await asyncio.sleep(remaining)
 
     async def run_match_timer(self, room_id: str, room: Room) -> None:
         try:
@@ -246,6 +266,12 @@ class PKRoomManager:
                     **self._timing(room),
                 }
                 await self._send(room_id, room, {uid: message for uid in room.players})
+                if (
+                    self.rooms.get(room_id) is not room
+                    or room.phase != "playing"
+                    or room.timer_task is not asyncio.current_task()
+                ):
+                    return
             await self._wait_until(room.ends_at)
             async with room.lock:
                 if (
@@ -254,11 +280,29 @@ class PKRoomManager:
                     and room.timer_task is asyncio.current_task()
                 ):
                     await self._finish(room_id, room)
+        except Exception:
+            logger.exception("PK match timer failed")
         finally:
-            if room.timer_task is asyncio.current_task():
-                room.timer_task = None
+            async with room.lock:
+                if room.timer_task is asyncio.current_task():
+                    room.timer_task = None
+                    if self.rooms.get(room_id) is room and room.phase in {
+                        "countdown",
+                        "playing",
+                    }:
+                        # Cancellation or an unexpected timer failure must not
+                        # leave an active room without its authoritative timer.
+                        self._cancel_match(room)
+                        await self._room_state(room_id, room)
 
     async def _finish(self, room_id: str, room: Room) -> None:
+        if (
+            self.rooms.get(room_id) is not room
+            or room.phase not in {"countdown", "playing"}
+            or monotonic() < room.ends_at
+            or len(room.players) != 2
+        ):
+            return
         room.phase = "finished"
         messages = {}
         for user_id, player in room.players.items():
@@ -286,9 +330,13 @@ class PKRoomManager:
         if room is None:
             return False
         async with room.lock:
-            if user_id not in room.players or (
-                websocket is not None
-                and room.players[user_id].websocket is not websocket
+            if (
+                self.rooms.get(room_id) is not room
+                or user_id not in room.players
+                or (
+                    websocket is not None
+                    and room.players[user_id].websocket is not websocket
+                )
             ):
                 return False
             now = monotonic()
