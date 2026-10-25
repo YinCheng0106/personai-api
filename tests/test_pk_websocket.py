@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -217,4 +219,74 @@ def test_duplicate_user_rejection_and_disconnect_room_cleanup(
             assert state["opponent_ready"] is False
             assert state["opponent_score"] == 0
             assert pk_module.manager.rooms["2468"].phase == "waiting"
+    assert pk_module.manager.rooms == {}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "{",
+        "[]",
+        '{"type":"READY","ready":1}',
+        '{"type":"GAME_START"}',
+        '{"type":"GAME_BEGIN"}',
+        '{"type":"GAME_END","score":999,"result":"win"}',
+        '{"type":"SCORE_UPDATE","score":1.5}',
+        '{"type":"SCORE_UPDATE","score":"1"}',
+    ],
+)
+def test_pk_rejects_malformed_and_client_lifecycle_messages(pk_client, raw):
+    with _connect(pk_client, "first") as first:
+        first.receive_json()
+        first.send_text(raw)
+        with pytest.raises(WebSocketDisconnect) as exc:
+            first.receive_json()
+        assert exc.value.code == 4400
+    assert pk_module.manager.rooms == {}
+
+
+@pytest.mark.parametrize(
+    "query", ["room=123&exercise_type=squat", "room=1234&exercise_type=invalid"]
+)
+def test_pk_rejects_invalid_room_and_exercise(pk_client, query):
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with pk_client.websocket_connect(
+            f"/ws/pk?{query}",
+            headers={"origin": "http://localhost:3000"},
+            subprotocols=["personai.v1", "first"],
+        ):
+            pytest.fail("invalid room or exercise must be rejected")
+    assert exc.value.code == 4400
+    assert pk_module.manager.rooms == {}
+
+
+def test_pk_message_limit_counts_utf8_bytes(pk_client):
+    with _connect(pk_client, "first") as first:
+        first.receive_json()
+        first.send_text('"' + "測" * 22_000 + '"')
+        with pytest.raises(WebSocketDisconnect) as exc:
+            first.receive_json()
+        assert exc.value.code == 4400
+        assert exc.value.reason == "Message too large"
+    assert pk_module.manager.rooms == {}
+
+
+@pytest.mark.parametrize("advance", [0, 1])
+def test_pk_rate_limit_and_one_second_window(pk_client, monkeypatch, advance):
+    settings = replace(pk_module.get_settings(), websocket_max_frames_per_second=1)
+    clock = [100.0]
+    monkeypatch.setattr(pk_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(pk_module, "monotonic", lambda: clock[0])
+    with _connect(pk_client, "first") as first:
+        first.receive_json()
+        first.send_json({"type": "READY", "ready": False})
+        assert first.receive_json()["type"] == "ROOM_STATE"
+        clock[0] += advance
+        first.send_json({"type": "READY", "ready": False})
+        if advance:
+            assert first.receive_json()["type"] == "ROOM_STATE"
+            first.send_json({"type": "READY", "ready": False})
+        with pytest.raises(WebSocketDisconnect) as exc:
+            first.receive_json()
+        assert exc.value.code == 4429
     assert pk_module.manager.rooms == {}

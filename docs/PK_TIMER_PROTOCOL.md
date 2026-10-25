@@ -25,8 +25,13 @@ the same monotonic clock used to enforce the match, even if wall time changes.
 The browser converts the server-relative remaining time to a `performance.now()`
 deadline. A delayed/duplicate `GAME_BEGIN` never extends the deadline. Local zero
 stops analysis and score sends, but final scores/results require `GAME_END`.
-One-way transport delay can still make display clocks slightly different;
-server receipt time, not either browser's display clock, decides score eligibility.
+One-way transport delay can still make display clocks slightly different.
+The server checks score eligibility under the room lock using monotonic time,
+not either browser's display clock. A score queued before the deadline but only
+validated at/after it is ignored. Timer wakeups recheck the deadline, so an early
+wakeup cannot start or finish a match early. A delayed timer never extends play;
+if the whole match window elapsed before countdown processing resumes, the server
+sends the final result without an expired `GAME_BEGIN`.
 
 Well-formed score updates in preparation or after expiration are ignored, so
 in-flight frames cannot erase results by disconnecting a player. In-flight scores
@@ -47,6 +52,23 @@ The last departure deletes the room. Failed/bounded socket sends use the same
 cleanup path; one failed final notification cannot prevent the other's result.
 Old socket cleanup cannot remove or control a replacement socket.
 
+Room operations recheck the room object's identity after waiting for its lock.
+Broadcasts stop when that room is no longer registered. Timer transitions also
+check the owning task, so deleting/reusing a room code or starting another match
+cannot let old cleanup or a stale timer modify the replacement. Sends retain the
+existing five-second timeout per recipient. A failed `GAME_BEGIN` aborts the
+match and stops its timer; failed `GAME_END` sends preserve the completed scores
+and still attempt the other player's result. Finishing is idempotent and only
+allowed once the server deadline has elapsed.
+
+Cancelling an active timer or an unexpected timer error resets the current match
+to waiting, clears scores/readiness and notifies connected players. Cleanup only
+applies while that task still owns the current room; it cannot clear a replacement
+timer. Transport-detected disconnects during preparation/play use the same reset
+path. Finished results remain immutable.
+Failed/cancelled handshakes remove only their own empty room. An accept that
+completes after its room was deleted is rejected instead of joining the old room.
+
 ## Deployment and validation limits
 
 Deploy this frontend/backend contract together. Old clients interpret
@@ -57,10 +79,26 @@ resuming an interrupted match are outside this change. Scores remain
 client-reported, with server validation of sequence and time only.
 Network loss is recognized when the WebSocket transport detects it; this does
 not add a reconnect grace period or persistent result history.
+Result delivery has no acknowledgement/replay guarantee if a connection fails.
+The unchanged score protocol has no match identifier: a delayed frame from a
+surviving socket that happens to be the next valid score in a later match cannot
+be distinguished from a fresh frame. Clients must stop analysis and discard old
+score sends on interruption; adding a match identifier would require a separate
+frontend/backend protocol change. Room identity/task checks protect server tasks
+and replaced sockets, while scores remain client-reported.
 
 Automated tests use controlled clocks/transport, FastAPI TestClient and mocked
 browser boundaries. They do not establish real camera accuracy, full
 Better Auth/FastAPI integration or deployed network latency behavior.
+`tests/test_pk_timer_lifecycle.py` controls only the monotonic/wall clocks and
+async sleep/transport boundaries; it runs the production wait loop, timer,
+broadcast, score validation and cleanup methods. Queue futures and events control
+ordering without waiting 10 or 60 seconds. The regression matrix covers concurrent
+and repeated readiness, strict score order, both deadline boundaries, natural
+expiration and all results, interrupted/recreated rooms, blocked operations and
+notifications, cancellation/errors, and each lifecycle broadcast failing for
+either or both recipients. WebSocket tests also reject client-sent lifecycle
+events and malformed messages through the actual route.
 
 ## Manual verification
 
